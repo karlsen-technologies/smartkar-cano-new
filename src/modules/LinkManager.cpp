@@ -122,9 +122,9 @@ void LinkManager::loop() {
 void LinkManager::prepareForSleep() {
     Serial.println("[LINK] Preparing for sleep");
     
-    // Notify server we're going to sleep
+    // Notify server we're going to sleep with bye message
     if (state == LinkState::CONNECTED && client && client->connected()) {
-        sendStateUpdate("asleep");
+        sendBye("sleep");
         delay(100);  // Give time for message to send
         client->stop();
     }
@@ -153,11 +153,21 @@ bool LinkManager::send(const String& message) {
     return true;
 }
 
-bool LinkManager::sendStateUpdate(const String& deviceState) {
-    String msg = "{\"type\":\"state\",\"data\":{\"type\":\"device\",\"state\":\"";
-    msg += deviceState;
+bool LinkManager::sendBye(const String& reason) {
+    // Protocol v2: {"type":"bye","data":{"reason":"sleep"}}
+    String msg = "{\"type\":\"bye\",\"data\":{\"reason\":\"";
+    msg += reason;
     msg += "\"}}";
-    return send(msg);
+    
+    if (!client || !client->connected()) {
+        return false;
+    }
+    
+    client->println(msg);
+    
+    if (activityCallback) activityCallback();
+    
+    return true;
 }
 
 void LinkManager::handleTCPInterrupt() {
@@ -209,7 +219,7 @@ bool LinkManager::stateJustChanged() {
 
 void LinkManager::setState(LinkState newState) {
     if (state != newState) {
-        Serial.printf("[LINK] State: %d -> %d\n", (int)state, (int)newState);
+        Serial.printf("[LINK] State: %d -> %d\r\n", (int)state, (int)newState);
         previousState = state;
         state = newState;
         stateEntryTime = millis();
@@ -229,7 +239,7 @@ bool LinkManager::connect() {
         return false;
     }
 
-    Serial.printf("[LINK] Connecting to %s:%d\n", LINK_SERVER_HOST, LINK_SERVER_PORT);
+    Serial.printf("[LINK] Connecting to %s:%d\r\n", LINK_SERVER_HOST, LINK_SERVER_PORT);
     
     if (client->connect(LINK_SERVER_HOST, LINK_SERVER_PORT)) {
         Serial.println("[LINK] TCP connect initiated");
@@ -255,7 +265,8 @@ bool LinkManager::sendAuth() {
 
     String ccid = modemManager->getSimCCID();
     
-    String auth = "{\"type\":\"authentication\",\"data\":{\"action\":\"authenticate\",\"ccid\":\"";
+    // Protocol v2: {"type":"auth","data":{"ccid":"..."}}
+    String auth = "{\"type\":\"auth\",\"data\":{\"ccid\":\"";
     auth += ccid;
     auth += "\"}}";
     
@@ -306,24 +317,26 @@ void LinkManager::handleMessage(const String& json) {
     
     String type = doc["type"].as<String>();
     
-    if (type == "authentication") {
+    // Protocol v2: auth response
+    if (type == "auth") {
         JsonObject data = doc["data"];
-        if (data && data["action"].is<const char*>()) {
-            String action = data["action"].as<String>();
-            handleAuthResponse(action);
+        if (data && data["ok"].is<bool>()) {
+            bool ok = data["ok"].as<bool>();
+            String reason = data["reason"] | "";
+            handleAuthResponse(ok, reason);
         }
-    } else if (type == "command") {
+    } 
+    // Protocol v2: command (params flattened into data)
+    else if (type == "command") {
         JsonObject data = doc["data"];
         if (data && data["action"].is<const char*>()) {
             String action = data["action"].as<String>();
             int id = data["id"] | 0;
             
-            // Get params object if present
-            JsonObject params = data["params"];
-            
-            // Route to CommandRouter
+            // In v2, params are flattened into data itself
+            // Route to CommandRouter with the whole data object
             if (commandRouter) {
-                commandRouter->handleCommand(action, id, params);
+                commandRouter->handleCommand(action, id, data);
             }
         }
     } else {
@@ -333,21 +346,16 @@ void LinkManager::handleMessage(const String& json) {
     if (activityCallback) activityCallback();
 }
 
-void LinkManager::handleAuthResponse(const String& action) {
-    if (action == "accepted") {
+void LinkManager::handleAuthResponse(bool ok, const String& reason) {
+    if (ok) {
         Serial.println("[LINK] Authentication accepted");
         setState(LinkState::CONNECTED);
         
-        // Send awake state after auth
-        sendStateUpdate("awake");
-        
-        // Reset telemetry timer
+        // Reset telemetry timer - auth success implies device is awake
         lastTelemetryTime = millis();
-    } else if (action == "rejected") {
-        Serial.println("[LINK] Authentication rejected");
-        setState(LinkState::REJECTED);
     } else {
-        Serial.println("[LINK] Unknown auth action: " + action);
+        Serial.println("[LINK] Authentication rejected: " + reason);
+        setState(LinkState::REJECTED);
     }
 }
 

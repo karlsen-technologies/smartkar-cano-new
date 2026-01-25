@@ -21,112 +21,69 @@ This document describes the JSON protocol used for communication between the Sma
      │                                               │
      │──────────── TCP Connect ─────────────────────►│
      │                                               │
-     │──────────── Authentication Request ──────────►│
+     │──────────── auth ────────────────────────────►│
      │                                               │
-     │◄─────────── Authentication Response ──────────│
+     │◄─────────── auth (response) ──────────────────│
      │                                               │
-     │◄─────────── Commands (anytime) ───────────────│
-     │──────────── Responses ───────────────────────►│
+     │◄─────────── command (anytime) ────────────────│
+     │──────────── response ────────────────────────►│
      │                                               │
-     │──────────── Telemetry (periodic) ────────────►│
+     │──────────── state (periodic) ────────────────►│
      │                                               │
-     │──────────── Events (when triggered) ─────────►│
+     │──────────── event (immediate) ───────────────►│
      │                                               │
-     │──────────── State: asleep ───────────────────►│
-     │                                               │
+     │──────────── bye ─────────────────────────────►│
      │──────────── TCP Disconnect ──────────────────►│
      │                                               │
 ```
 
-## Message Structure
+## Message Types
 
-All messages follow this structure:
-
-```json
-{
-  "type": "<message_type>",
-  "data": { ... }
-}
-```
-
-### Message Types
-
-| Type | Direction | Description |
-|------|-----------|-------------|
-| `authentication` | Both | Authentication handshake |
+| Type | Direction | Purpose |
+|------|-----------|---------|
+| `auth` | Both | Authentication handshake |
 | `command` | Server → Device | Command to execute |
 | `response` | Device → Server | Response to a command |
-| `telemetry` | Device → Server | Periodic status data |
-| `event` | Device → Server | Real-time event notification |
-| `state` | Device → Server | Device state change |
+| `state` | Device → Server | Periodic telemetry snapshot |
+| `event` | Device → Server | Immediate notification of important changes |
+| `bye` | Device → Server | Device going offline |
 
 ---
 
 ## Authentication
 
-### Authentication Request (Device → Server)
+### Auth Request (Device → Server)
 
 Sent immediately after TCP connection is established.
 
 ```json
-{
-  "type": "authentication",
-  "data": {
-    "action": "authenticate",
-    "ccid": "<SIM_ICCID>"
-  }
-}
+{"type":"auth","data":{"ccid":"8947080012345678901"}}
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `action` | string | Always `"authenticate"` |
 | `ccid` | string | SIM card ICCID (19-20 digits) |
 
-**Example:**
-```json
-{
-  "type": "authentication",
-  "data": {
-    "action": "authenticate",
-    "ccid": "8947080012345678901"
-  }
-}
-```
-
-### Authentication Response (Server → Device)
-
-Server must respond with acceptance or rejection.
+### Auth Response (Server → Device)
 
 **Accepted:**
 ```json
-{
-  "type": "authentication",
-  "data": {
-    "action": "accepted"
-  }
-}
+{"type":"auth","data":{"ok":true}}
 ```
 
 **Rejected:**
 ```json
-{
-  "type": "authentication",
-  "data": {
-    "action": "rejected",
-    "reason": "Unknown device"
-  }
-}
+{"type":"auth","data":{"ok":false,"reason":"Unknown device"}}
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `action` | string | `"accepted"` or `"rejected"` |
+| `ok` | boolean | Whether authentication succeeded |
 | `reason` | string | (Optional) Rejection reason |
 
 **Device Behavior:**
-- On `accepted`: Transition to connected state, begin telemetry
-- On `rejected`: Close connection, may retry after timeout
+- On `ok: true`: Transition to connected state, begin sending telemetry
+- On `ok: false`: Close connection, may retry after timeout
 
 ---
 
@@ -135,50 +92,39 @@ Server must respond with acceptance or rejection.
 ### Command Message (Server → Device)
 
 ```json
-{
-  "type": "command",
-  "data": {
-    "id": <command_id>,
-    "action": "<domain>.<action>",
-    "params": { ... }
-  }
-}
+{"type":"command","data":{"id":1,"action":"system.reboot"}}
+{"type":"command","data":{"id":2,"action":"system.sleep","duration":300}}
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | integer | Unique command identifier (for correlating responses) |
 | `action` | string | Command action in format `domain.action` |
-| `params` | object | Command-specific parameters (optional, can be empty `{}`) |
+| *...params* | various | Command parameters flattened into data object |
 
 ### Response Message (Device → Server)
 
 ```json
-{
-  "type": "response",
-  "data": {
-    "id": <command_id>,
-    "status": "<status>",
-    "data": { ... },
-    "error": "<error_message>"
-  }
-}
+{"type":"response","data":{"id":1,"ok":true}}
+{"type":"response","data":{"id":2,"ok":true,"wakeMode":"timer"}}
+{"type":"response","data":{"id":3,"ok":false,"status":"error","error":"Invalid parameter"}}
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | integer | Matches the command `id` |
-| `status` | string | `"ok"`, `"error"`, `"pending"`, `"not_supported"` |
-| `data` | object | Response payload (when `status` is `"ok"`) |
-| `error` | string | Error message (when `status` is `"error"`) |
+| `ok` | boolean | Whether command succeeded |
+| `status` | string | Status code (when `ok` is false): `error`, `pending`, `not_supported` |
+| `error` | string | Error message (when `ok` is false) |
+| *...data* | various | Response data flattened into data object |
 
-### Command Status Values
+### Response Status Values
 
 | Status | Description |
 |--------|-------------|
-| `ok` | Command executed successfully |
+| *(ok: true)* | Command executed successfully |
 | `error` | Command failed (see `error` field) |
-| `pending` | Command accepted, will complete asynchronously |
+| `pending` | Command accepted, will complete asynchronously (watch for events) |
 | `not_supported` | Unknown command or domain |
 
 ---
@@ -189,30 +135,13 @@ Server must respond with acceptance or rejection.
 
 Restarts the device.
 
-**Request:**
 ```json
-{
-  "type": "command",
-  "data": {
-    "id": 1,
-    "action": "system.reboot",
-    "params": {}
-  }
-}
+{"type":"command","data":{"id":1,"action":"system.reboot"}}
 ```
 
 **Response:**
 ```json
-{
-  "type": "response",
-  "data": {
-    "id": 1,
-    "status": "ok",
-    "data": {
-      "message": "Rebooting"
-    }
-  }
-}
+{"type":"response","data":{"id":1,"ok":true,"message":"Rebooting"}}
 ```
 
 **Note:** Response is sent before reboot. Device will disconnect and reconnect after restart.
@@ -223,18 +152,8 @@ Restarts the device.
 
 Requests the device to enter deep sleep.
 
-**Request:**
 ```json
-{
-  "type": "command",
-  "data": {
-    "id": 2,
-    "action": "system.sleep",
-    "params": {
-      "duration": 300
-    }
-  }
-}
+{"type":"command","data":{"id":2,"action":"system.sleep","duration":300}}
 ```
 
 | Parameter | Type | Description |
@@ -243,17 +162,7 @@ Requests the device to enter deep sleep.
 
 **Response:**
 ```json
-{
-  "type": "response",
-  "data": {
-    "id": 2,
-    "status": "ok",
-    "data": {
-      "duration": 300,
-      "wakeMode": "timer_or_interrupt"
-    }
-  }
-}
+{"type":"response","data":{"id":2,"ok":true,"duration":300,"wakeMode":"timer_or_interrupt"}}
 ```
 
 | Response Field | Description |
@@ -261,42 +170,39 @@ Requests the device to enter deep sleep.
 | `duration` | Confirmed sleep duration |
 | `wakeMode` | `"timer_or_interrupt"` or `"interrupt_only"` |
 
-**Behavior:** Device will send response, then send `state: asleep`, then enter deep sleep.
+**Behavior:** Device will send response, then send `bye`, then enter deep sleep.
+
+---
+
+### system.wakeup
+
+Acknowledges that the device is awake. No-op command that confirms the device received the wakeup signal.
+
+```json
+{"type":"command","data":{"id":3,"action":"system.wakeup"}}
+```
+
+**Response:**
+```json
+{"type":"response","data":{"id":3,"ok":true,"message":"Device is awake","uptime":1234}}
+```
 
 ---
 
 ### system.telemetry
 
-Forces immediate telemetry collection.
+Forces immediate telemetry collection and send.
 
-**Request:**
 ```json
-{
-  "type": "command",
-  "data": {
-    "id": 3,
-    "action": "system.telemetry",
-    "params": {}
-  }
-}
+{"type":"command","data":{"id":4,"action":"system.telemetry"}}
 ```
 
 **Response:**
 ```json
-{
-  "type": "response",
-  "data": {
-    "id": 3,
-    "status": "ok",
-    "data": {
-      "message": "Telemetry collected",
-      "collected": true
-    }
-  }
-}
+{"type":"response","data":{"id":4,"ok":true,"message":"Telemetry collected"}}
 ```
 
-**Note:** This triggers telemetry collection. The telemetry will be sent as a separate `telemetry` message.
+**Note:** The state will be sent as a separate `state` message.
 
 ---
 
@@ -304,95 +210,66 @@ Forces immediate telemetry collection.
 
 Returns detailed device information.
 
-**Request:**
 ```json
-{
-  "type": "command",
-  "data": {
-    "id": 4,
-    "action": "system.info",
-    "params": {}
-  }
-}
+{"type":"command","data":{"id":5,"action":"system.info"}}
 ```
 
 **Response:**
 ```json
 {
-  "type": "response",
-  "data": {
-    "id": 4,
-    "status": "ok",
-    "data": {
-      "chipModel": "ESP32-S3",
-      "chipRevision": 0,
-      "chipCores": 2,
-      "cpuFreqMHz": 240,
-      "freeHeap": 245760,
-      "minFreeHeap": 234500,
-      "heapSize": 327680,
-      "flashSize": 16777216,
-      "flashSpeed": 80000000,
-      "sdkVersion": "v4.4.6",
-      "uptime": 125340
-    }
+  "type":"response",
+  "data":{
+    "id":5,
+    "ok":true,
+    "chipModel":"ESP32-S3",
+    "chipRevision":0,
+    "chipCores":2,
+    "cpuFreqMHz":240,
+    "freeHeap":245760,
+    "minFreeHeap":234500,
+    "heapSize":327680,
+    "flashSize":16777216,
+    "flashSpeed":80000000,
+    "sdkVersion":"v4.4.6",
+    "uptime":125340
   }
 }
 ```
-
-| Response Field | Type | Description |
-|----------------|------|-------------|
-| `chipModel` | string | ESP32 chip model |
-| `chipRevision` | integer | Chip revision number |
-| `chipCores` | integer | Number of CPU cores |
-| `cpuFreqMHz` | integer | CPU frequency in MHz |
-| `freeHeap` | integer | Current free heap in bytes |
-| `minFreeHeap` | integer | Minimum free heap since boot |
-| `heapSize` | integer | Total heap size in bytes |
-| `flashSize` | integer | Flash size in bytes |
-| `flashSpeed` | integer | Flash speed in Hz |
-| `sdkVersion` | string | ESP-IDF SDK version |
-| `uptime` | integer | Milliseconds since boot |
 
 ---
 
-## Telemetry
+## State
 
-### Telemetry Message (Device → Server)
+### State Message (Device → Server)
 
-Sent periodically based on priority (5 seconds to 5 minutes).
+Sent periodically (interval based on priority), contains full telemetry snapshot.
 
 ```json
 {
-  "type": "telemetry",
-  "data": {
-    "<domain>": { ... },
-    "<domain>": { ... }
+  "type":"state",
+  "data":{
+    "device":{...},
+    "network":{...}
   }
 }
 ```
 
-Multiple domains can be included in a single telemetry message.
+Multiple domains are included in a single state message.
 
-### Device Telemetry Domain
-
-Domain: `device`
+### Device Domain
 
 ```json
 {
-  "type": "telemetry",
-  "data": {
-    "device": {
-      "uptime": 125340,
-      "freeHeap": 245760,
-      "wakeCause": "modem_ri",
-      "batteryVoltage": 4.15,
-      "batteryPercent": 85,
-      "charging": true,
-      "vbusConnected": true,
-      "chipModel": "ESP32-S3",
-      "chipRevision": 0,
-      "cpuFreqMHz": 240
+  "type":"state",
+  "data":{
+    "device":{
+      "uptime":125340,
+      "freeHeap":245760,
+      "wakeCause":"modem_ri",
+      "batteryVoltage":4.15,
+      "batteryPercent":85,
+      "charging":true,
+      "vbusConnected":true
     }
   }
 }
@@ -402,46 +279,25 @@ Domain: `device`
 |-------|------|-------------|
 | `uptime` | integer | Milliseconds since boot |
 | `freeHeap` | integer | Free heap memory in bytes |
-| `wakeCause` | string | Wake reason (see below) |
+| `wakeCause` | string | Wake reason: `fresh_boot`, `timer`, `gpio`, `modem_ri`, `unknown` |
 | `batteryVoltage` | float | Battery voltage (V) |
 | `batteryPercent` | integer | Battery percentage (0-100) |
 | `charging` | boolean | Whether battery is charging |
 | `vbusConnected` | boolean | Whether USB/external power is connected |
-| `chipModel` | string | ESP32 chip model |
-| `chipRevision` | integer | Chip silicon revision |
-| `cpuFreqMHz` | integer | CPU frequency |
 
-**Wake Cause Values:**
-
-| Value | Description |
-|-------|-------------|
-| `fresh_boot` | Initial power-on |
-| `timer` | Timer wake from deep sleep |
-| `gpio` | GPIO wake |
-| `modem_ri` | Modem RI pin (EXT1) wake |
-| `unknown` | Unknown wake cause |
-
-**Trigger Conditions:**
-- Initial report on device wake
-- Every 5 minutes
-- Battery level change > 5%
-- Charging state change
-
-### Network Telemetry Domain
-
-Domain: `network`
+### Network Domain
 
 ```json
 {
-  "type": "telemetry",
-  "data": {
-    "network": {
-      "modemState": "connected",
-      "signalStrength": -75,
-      "simCCID": "8947080012345678901",
-      "modemConnected": true,
-      "linkConnected": true,
-      "linkState": "connected"
+  "type":"state",
+  "data":{
+    "network":{
+      "modemState":"connected",
+      "signalStrength":-75,
+      "simCCID":"8947080012345678901",
+      "modemConnected":true,
+      "linkConnected":true,
+      "linkState":"connected"
     }
   }
 }
@@ -449,39 +305,12 @@ Domain: `network`
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `modemState` | string | Current modem state (see below) |
+| `modemState` | string | `off`, `starting`, `configuring`, `searching`, `registered`, `connected`, `error` |
 | `signalStrength` | integer | Signal strength in dBm |
 | `simCCID` | string | SIM card ICCID |
 | `modemConnected` | boolean | Whether modem has internet |
 | `linkConnected` | boolean | Whether TCP link is connected |
-| `linkState` | string | Current link state (see below) |
-
-**Modem State Values:**
-
-| Value | Description |
-|-------|-------------|
-| `off` | Modem powered off |
-| `starting` | Modem powering on |
-| `configuring` | Configuring modem settings |
-| `searching` | Searching for network |
-| `registered` | Registered, activating PDP |
-| `connected` | Internet connected |
-| `error` | Error state |
-
-**Link State Values:**
-
-| Value | Description |
-|-------|-------------|
-| `disconnected` | Not connected to server |
-| `connecting` | TCP connecting |
-| `authenticating` | Waiting for auth response |
-| `connected` | Authenticated |
-
-**Trigger Conditions:**
-- Initial report on device wake
-- Every 2 minutes
-- Modem or link state change
-- Signal strength change > 10 dBm
+| `linkState` | string | `disconnected`, `connecting`, `authenticating`, `connected` |
 
 ---
 
@@ -489,139 +318,86 @@ Domain: `network`
 
 ### Event Message (Device → Server)
 
-Sent immediately when significant events occur.
+Sent immediately when important state changes occur. Used for real-time notifications.
 
 ```json
-{
-  "type": "event",
-  "data": {
-    "domain": "<domain>",
-    "event": "<event_name>",
-    "timestamp": <unix_timestamp>,
-    "details": { ... }
-  }
-}
+{"type":"event","data":{"domain":"charging","name":"started","power":7400}}
+{"type":"event","data":{"domain":"charging","name":"stopped","reason":"complete"}}
+{"type":"event","data":{"domain":"security","name":"doorOpened","door":"driver"}}
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `domain` | string | Event domain (e.g., `"system"`, `"vehicle"`) |
-| `event` | string | Event name |
-| `timestamp` | integer | Unix timestamp (seconds) |
-| `details` | object | Event-specific data |
+| `domain` | string | Event domain (e.g., `charging`, `security`, `climate`) |
+| `name` | string | Event name (e.g., `started`, `stopped`, `doorOpened`) |
+| *...details* | various | Event-specific data flattened into data object |
 
-**Example (future vehicle event):**
-```json
-{
-  "type": "event",
-  "data": {
-    "domain": "charging",
-    "event": "chargingStarted",
-    "timestamp": 1706200000,
-    "details": {
-      "chargerPower": 7400,
-      "targetSoc": 80
-    }
-  }
-}
-```
+**Events vs State:**
+- **Events** are immediate, partial, and indicate something alert-worthy happened
+- **State** is periodic, complete, and provides full telemetry snapshot
+- Server should trigger push notifications based on events
+- Server should update dashboards/history based on state
+
+### Planned Events
+
+| Domain | Event | Description |
+|--------|-------|-------------|
+| `charging` | `started` | Charging began |
+| `charging` | `stopped` | Charging ended (reason: `complete`, `unplugged`, `error`, `manual`) |
+| `climate` | `started` | Climate control started |
+| `climate` | `stopped` | Climate control stopped |
+| `security` | `doorOpened` | Door opened |
+| `security` | `doorClosed` | Door closed |
+| `security` | `locked` | Vehicle locked |
+| `security` | `unlocked` | Vehicle unlocked |
+| `security` | `alarm` | Alarm triggered |
 
 ---
 
-## State Updates
+## Bye
 
-### State Message (Device → Server)
+### Bye Message (Device → Server)
 
-Sent when device state changes significantly.
+Sent immediately before device disconnects intentionally.
 
 ```json
-{
-  "type": "state",
-  "data": {
-    "type": "device",
-    "state": "<state>"
-  }
-}
+{"type":"bye","data":{"reason":"sleep"}}
 ```
 
-**Current States:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `reason` | string | `sleep`, `shutdown`, `reboot` |
 
-| State | Description |
-|-------|-------------|
-| `asleep` | Device is entering deep sleep |
-| `awake` | Device has woken up (future) |
+**Note:** No response expected. Device disconnects immediately after sending.
 
-**Example:**
-```json
-{
-  "type": "state",
-  "data": {
-    "type": "device",
-    "state": "asleep"
-  }
-}
-```
-
-**Note:** The `asleep` state is sent just before the device disconnects and enters deep sleep.
+This allows the server to distinguish between:
+- Intentional disconnect (bye received) - device is offline by design
+- Connection loss (no bye) - something went wrong, may need alerting
 
 ---
 
 ## Future Commands (Planned)
 
-These commands are planned for vehicle integration:
-
-### charging.start
+### charging.setLimit
 ```json
-{
-  "type": "command",
-  "data": {
-    "id": 10,
-    "action": "charging.start",
-    "params": {
-      "targetSoc": 80,
-      "maxCurrent": 16
-    }
-  }
-}
+{"type":"command","data":{"id":10,"action":"charging.setLimit","percent":80}}
 ```
 
-### charging.stop
+### charging.start / charging.stop
 ```json
-{
-  "type": "command",
-  "data": {
-    "id": 11,
-    "action": "charging.stop",
-    "params": {}
-  }
-}
+{"type":"command","data":{"id":11,"action":"charging.start"}}
+{"type":"command","data":{"id":12,"action":"charging.stop"}}
 ```
 
-### climate.preheat
+### climate.start
 ```json
-{
-  "type": "command",
-  "data": {
-    "id": 12,
-    "action": "climate.preheat",
-    "params": {
-      "targetTemp": 21,
-      "duration": 15
-    }
-  }
-}
+{"type":"command","data":{"id":13,"action":"climate.start","targetTemp":21,"duration":15}}
 ```
 
 ### security.lock / security.unlock
 ```json
-{
-  "type": "command",
-  "data": {
-    "id": 13,
-    "action": "security.lock",
-    "params": {}
-  }
-}
+{"type":"command","data":{"id":14,"action":"security.lock"}}
+{"type":"command","data":{"id":15,"action":"security.unlock"}}
 ```
 
 ---
@@ -630,40 +406,32 @@ These commands are planned for vehicle integration:
 
 ### Command Errors
 
-When a command fails, the response includes an error message:
-
 ```json
-{
-  "type": "response",
-  "data": {
-    "id": 5,
-    "status": "error",
-    "error": "Invalid parameter: duration must be positive"
-  }
-}
+{"type":"response","data":{"id":5,"ok":false,"status":"error","error":"Invalid parameter: duration must be positive"}}
 ```
 
 ### Unknown Commands
 
-Unknown domains or actions return `not_supported`:
-
 ```json
-{
-  "type": "response",
-  "data": {
-    "id": 6,
-    "status": "not_supported",
-    "error": "Unknown domain: foo"
-  }
-}
+{"type":"response","data":{"id":6,"ok":false,"status":"not_supported","error":"Unknown domain: foo"}}
 ```
 
-### Connection Loss
+### Async Commands (Pending)
 
-If the TCP connection is lost:
-- Device will attempt to reconnect when modem is connected
-- Server should consider the device offline after timeout
-- Any pending commands should be retried after reconnection
+Some commands take time to complete (e.g., starting climate control). These return `pending` immediately, and the actual result comes via events:
+
+```json
+// Command
+{"type":"command","data":{"id":7,"action":"climate.start","targetTemp":21}}
+
+// Immediate response
+{"type":"response","data":{"id":7,"ok":false,"status":"pending"}}
+
+// Later, when climate actually starts (or fails)
+{"type":"event","data":{"domain":"climate","name":"started","targetTemp":21}}
+// or
+{"type":"event","data":{"domain":"climate","name":"error","error":"Battery too low"}}
+```
 
 ---
 
@@ -674,8 +442,8 @@ If the TCP connection is lost:
 1. **TCP Server** - Listen on configured port (default 4589)
 2. **Device Registry** - Map CCID to device records for authentication
 3. **Command Queue** - Store pending commands for offline devices
-4. **Telemetry Storage** - Store and query telemetry data
-5. **Event Handling** - Process real-time events
+4. **State Storage** - Store and query telemetry data
+5. **Event Handling** - Process events, trigger push notifications
 
 ### Recommended Behavior
 
@@ -686,85 +454,26 @@ If the TCP connection is lost:
 
 ### Message Parsing
 
-```
-while (socket is connected):
-    line = read until '\n'
-    message = JSON.parse(line)
-    
-    switch (message.type):
-        case "authentication":
-            handle_authentication(message.data)
-        case "response":
-            handle_response(message.data)
-        case "telemetry":
-            store_telemetry(message.data)
-        case "event":
-            process_event(message.data)
-        case "state":
-            update_device_state(message.data)
-```
-
-### Example Server Pseudocode
-
 ```python
-class DeviceConnection:
-    def __init__(self, socket):
-        self.socket = socket
-        self.authenticated = False
-        self.device_id = None
+while socket.connected:
+    line = socket.readline()
+    message = json.loads(line)
     
-    def handle_message(self, message):
-        if message['type'] == 'authentication':
-            ccid = message['data']['ccid']
-            device = database.find_device_by_ccid(ccid)
-            
-            if device:
-                self.authenticated = True
-                self.device_id = device.id
-                self.send({
-                    'type': 'authentication',
-                    'data': {'action': 'accepted'}
-                })
-                # Send any pending commands
-                self.send_pending_commands()
-            else:
-                self.send({
-                    'type': 'authentication',
-                    'data': {'action': 'rejected', 'reason': 'Unknown device'}
-                })
-                self.socket.close()
-        
-        elif message['type'] == 'response':
-            command_id = message['data']['id']
-            database.update_command_status(command_id, message['data'])
-        
-        elif message['type'] == 'telemetry':
-            database.store_telemetry(self.device_id, message['data'])
-        
-        elif message['type'] == 'state':
-            if message['data']['state'] == 'asleep':
-                database.set_device_offline(self.device_id)
-    
-    def send_command(self, action, params={}):
-        command_id = database.create_command(self.device_id, action, params)
-        self.send({
-            'type': 'command',
-            'data': {
-                'id': command_id,
-                'action': action,
-                'params': params
-            }
-        })
+    match message["type"]:
+        case "auth":
+            handle_auth(message["data"])
+        case "response":
+            handle_response(message["data"])
+        case "state":
+            store_state(message["data"])
+        case "event":
+            process_event(message["data"])  # trigger push notifications
+        case "bye":
+            handle_bye(message["data"])
 ```
 
 ---
 
 ## Protocol Version
 
-This document describes **Protocol Version 1.0**.
-
-Future versions may add:
-- Protocol version negotiation during authentication
-- Binary message encoding option
-- Message compression
-- Encryption (beyond TCP/TLS)
+This document describes **Protocol Version 2.0**.

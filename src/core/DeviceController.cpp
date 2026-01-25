@@ -8,10 +8,10 @@
 #include "../handlers/SystemHandler.h"
 
 #include <Arduino.h>
-#include "driver/rtc_io.h"
+#include "esp_sleep.h"
 
 // Default configuration
-#define DEFAULT_ACTIVITY_TIMEOUT    60000   // 1 minute (testing)
+#define DEFAULT_ACTIVITY_TIMEOUT    300000  // 5 minutes
 #define DEFAULT_MIN_AWAKE_TIME      10000   // 10 seconds
 
 // Static instance for callback
@@ -32,9 +32,18 @@ void DeviceController::setup() {
     Serial.begin(115200);
     Serial.println("[DEVICE] Starting up...");
 
-    logWakeupCause();
-
+    // Initialize modules first (need PowerManager for wake detection)
     initModules();
+    
+    // Now log wakeup cause (needs PowerManager to detect which pin)
+    logWakeupCause();
+    
+    // Handle low power mode wake - check if we should stay asleep
+    if (powerManager->isLowPowerMode()) {
+        handleLowPowerModeWake();
+        // If we return from handleLowPowerModeWake, power has been restored
+    }
+
     initProvidersAndHandlers();
 
     state = DeviceState::RUNNING;
@@ -57,18 +66,32 @@ void DeviceController::initModules() {
     powerManager->setActivityCallback(activityCb);
     modemManager->setActivityCallback(activityCb);
     linkManager->setActivityCallback(activityCb);
+    
+    // Set low battery callback
+    powerManager->setLowBatteryCallback(&DeviceController::lowBatteryCallbackWrapper);
 
     // Setup in dependency order
     if (!powerManager->setup()) {
         Serial.println("[DEVICE] PowerManager setup failed!");
     }
 
-    if (!modemManager->setup()) {
-        Serial.println("[DEVICE] ModemManager setup failed!");
-    }
+    // Don't setup modem if we're in low power mode - we'll check VBUS first
+    if (powerManager->isLowPowerMode()) {
+        Serial.println("[DEVICE] In low power mode - deferring modem setup");
+    } else {
+        if (!modemManager->setup()) {
+            Serial.println("[DEVICE] ModemManager setup failed!");
+        }
 
-    if (!linkManager->setup()) {
-        Serial.println("[DEVICE] LinkManager setup failed!");
+        if (!linkManager->setup()) {
+            Serial.println("[DEVICE] LinkManager setup failed!");
+        }
+
+        // Start the modem (unless it's already running from hotstart)
+        if (!modemManager->isReady() && !modemManager->isBusy()) {
+            Serial.println("[DEVICE] Starting modem...");
+            modemManager->enable();
+        }
     }
 
     Serial.println("[DEVICE] All modules initialized");
@@ -124,7 +147,7 @@ void DeviceController::loopModules() {
 
 void DeviceController::reportActivity() {
     lastActivityTime = millis();
-    Serial.println("[DEVICE] Activity reported, sleep timer reset");
+    // Note: Not logging here to avoid spam - activity is reported frequently
 }
 
 void DeviceController::activityCallbackWrapper() {
@@ -138,7 +161,7 @@ ActivityCallback DeviceController::getActivityCallback() {
 }
 
 void DeviceController::requestSleep(unsigned long durationSeconds) {
-    Serial.printf("[DEVICE] Sleep requested (duration: %lu seconds)\n", durationSeconds);
+    Serial.printf("[DEVICE] Sleep requested (duration: %lu seconds)\r\n", durationSeconds);
     sleepRequested = true;
     sleepDurationSeconds = durationSeconds;
 }
@@ -190,17 +213,12 @@ void DeviceController::enterSleep() {
     Serial.println("[DEVICE] Entering deep sleep...");
     Serial.flush();
 
-    // Configure wake sources
-    // GPIO_NUM_3 is modem RI pin
-    rtc_gpio_init(GPIO_NUM_3);
-    rtc_gpio_set_direction(GPIO_NUM_3, RTC_GPIO_MODE_INPUT_ONLY);
-    rtc_gpio_pulldown_dis(GPIO_NUM_3);
-    rtc_gpio_pullup_dis(GPIO_NUM_3);
-    esp_sleep_enable_ext1_wakeup(1ULL << GPIO_NUM_3, ESP_EXT1_WAKEUP_ANY_LOW);
+    // PowerManager handles wake source configuration in prepareForSleep()
+    // which was already called. It sets up GPIO3 (modem RI) and GPIO6 (PMU IRQ)
 
     // If a sleep duration was specified, also enable timer wake
     if (sleepDurationSeconds > 0) {
-        Serial.printf("[DEVICE] Timer wake in %lu seconds\n", sleepDurationSeconds);
+        Serial.printf("[DEVICE] Timer wake in %lu seconds\r\n", sleepDurationSeconds);
         esp_sleep_enable_timer_wakeup(sleepDurationSeconds * 1000000ULL);
     }
 
@@ -220,17 +238,107 @@ void DeviceController::logWakeupCause() {
             Serial.println("[DEVICE] Wakeup cause: GPIO");
             wakeCauseString = "gpio";
             break;
-        case ESP_SLEEP_WAKEUP_EXT1:
-            Serial.println("[DEVICE] Wakeup cause: EXT1 (Modem RI)");
-            wakeCauseString = "modem_ri";
+        case ESP_SLEEP_WAKEUP_EXT1: {
+            // Determine which pin triggered the wake
+            int wakePin = powerManager ? powerManager->getWakeupPin() : -1;
+            if (wakePin == 3) {
+                Serial.println("[DEVICE] Wakeup cause: EXT1 (Modem RI)");
+                wakeCauseString = "modem_ri";
+            } else if (wakePin == 6) {  // PMU_INPUT_PIN
+                Serial.println("[DEVICE] Wakeup cause: EXT1 (PMU IRQ)");
+                wakeCauseString = "pmu_irq";
+                // Check and log what PMU event occurred
+                powerManager->checkPmuWakeupCause();
+            } else {
+                Serial.printf("[DEVICE] Wakeup cause: EXT1 (GPIO%d)\r\n", wakePin);
+                wakeCauseString = "ext1";
+            }
             break;
+        }
         case ESP_SLEEP_WAKEUP_UNDEFINED:
             Serial.println("[DEVICE] Wakeup cause: Fresh boot");
             wakeCauseString = "fresh_boot";
             break;
         default:
-            Serial.printf("[DEVICE] Wakeup cause: Unknown (%d)\n", cause);
+            Serial.printf("[DEVICE] Wakeup cause: Unknown (%d)\r\n", cause);
             wakeCauseString = "unknown";
             break;
+    }
+}
+
+void DeviceController::handleLowPowerModeWake() {
+    Serial.println("[DEVICE] Woke in low power mode - checking if power restored...");
+    
+    // Check if VBUS (USB/external power) is now connected
+    if (powerManager->isVbusConnected()) {
+        Serial.println("[DEVICE] External power restored! Exiting low power mode.");
+        powerManager->exitLowPowerMode();
+        
+        // Now we need to setup and enable the modem since we skipped it
+        if (!modemManager->setup()) {
+            Serial.println("[DEVICE] ModemManager setup failed!");
+        }
+        if (!linkManager->setup()) {
+            Serial.println("[DEVICE] LinkManager setup failed!");
+        }
+        if (!modemManager->isReady() && !modemManager->isBusy()) {
+            Serial.println("[DEVICE] Starting modem...");
+            modemManager->enable();
+        }
+        return;  // Continue normal operation
+    }
+    
+    // Power not restored - go back to sleep immediately
+    Serial.println("[DEVICE] No external power - returning to low power sleep");
+    Serial.flush();
+    
+    // Re-enable wake sources and sleep
+    powerManager->enableDeepSleepWakeup();
+    esp_deep_sleep_start();
+    // We won't return from here
+}
+
+void DeviceController::handleLowBattery(uint8_t level) {
+    Serial.printf("[DEVICE] Low battery callback triggered (level %u)\r\n", level);
+    
+    if (level == 1) {
+        // Level 1 = 10% warning - initiate graceful shutdown
+        Serial.println("[DEVICE] Initiating low battery shutdown sequence...");
+        
+        // TODO: Send low_battery event to server via LinkManager
+        // For now, just log and prepare for shutdown
+        // linkManager->sendEvent("low_battery", ...);
+        
+        // Disconnect from server gracefully
+        linkManager->prepareForSleep();
+        
+        // Disable the modem to save power
+        Serial.println("[DEVICE] Disabling modem to conserve power");
+        modemManager->disable();
+        
+        // Enter low power mode
+        powerManager->enterLowPowerMode();
+        
+        // Request immediate sleep (0 = wake on interrupt only)
+        requestSleep(0);
+        
+    } else if (level == 2) {
+        // Level 2 = 5% critical - we might not have sent level 1 if it happened during sleep
+        // Do emergency shutdown
+        Serial.println("[DEVICE] CRITICAL battery - emergency shutdown!");
+        
+        // Just kill the modem and sleep immediately
+        powerManager->setModemPower(false);
+        powerManager->enterLowPowerMode();
+        powerManager->enableDeepSleepWakeup();
+        
+        Serial.flush();
+        esp_deep_sleep_start();
+    }
+}
+
+void DeviceController::lowBatteryCallbackWrapper(uint8_t level) {
+    if (instance) {
+        instance->handleLowBattery(level);
     }
 }

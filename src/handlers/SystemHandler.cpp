@@ -6,23 +6,27 @@
 const char* SystemHandler::supportedActions[] = {
     "reboot",
     "sleep",
+    "wakeup",
     "telemetry",
     "info"
 };
-const size_t SystemHandler::supportedActionCount = 4;
+const size_t SystemHandler::supportedActionCount = 5;
 
 SystemHandler::SystemHandler(DeviceController* deviceController, CommandRouter* commandRouter)
     : deviceController(deviceController), commandRouter(commandRouter) {
 }
 
 CommandResult SystemHandler::handleCommand(CommandContext& ctx) {
-    Serial.printf("[SYSTEM] Command: %s\n", ctx.actionName.c_str());
+    Serial.printf("[SYSTEM] Command: %s\r\n", ctx.actionName.c_str());
     
     if (ctx.actionName == "reboot") {
         return handleReboot(ctx);
     }
     else if (ctx.actionName == "sleep") {
         return handleSleep(ctx);
+    }
+    else if (ctx.actionName == "wakeup") {
+        return handleWakeup(ctx);
     }
     else if (ctx.actionName == "telemetry") {
         return handleTelemetry(ctx);
@@ -77,6 +81,14 @@ CommandResult SystemHandler::handleSleep(CommandContext& ctx) {
     } else {
         result.data["wakeMode"] = "interrupt_only";
     }
+    return result;
+}
+
+CommandResult SystemHandler::handleWakeup(CommandContext& ctx) {
+    Serial.println("[SYSTEM] Wakeup acknowledged");
+    
+    CommandResult result = CommandResult::ok("Device is awake");
+    result.data["uptime"] = millis();
     return result;
 }
 

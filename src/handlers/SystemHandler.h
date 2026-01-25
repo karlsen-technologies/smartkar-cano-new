@@ -13,9 +13,9 @@ class CommandRouter;
  * Supported commands:
  * - system.reboot     - Restart the device
  * - system.sleep      - Force device to enter deep sleep
+ * - system.wakeup     - Acknowledge wakeup (no-op, confirms device is awake)
  * - system.telemetry  - Force immediate telemetry send
  * - system.info       - Return detailed device info
- * - system.ping       - Simple ping/pong (alias for built-in)
  */
 class SystemHandler : public ICommandHandler {
 public:
@@ -38,6 +38,7 @@ private:
     // Command handlers
     CommandResult handleReboot(CommandContext& ctx);
     CommandResult handleSleep(CommandContext& ctx);
+    CommandResult handleWakeup(CommandContext& ctx);
     CommandResult handleTelemetry(CommandContext& ctx);
     CommandResult handleInfo(CommandContext& ctx);
     

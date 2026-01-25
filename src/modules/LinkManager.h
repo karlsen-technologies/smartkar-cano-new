@@ -74,11 +74,11 @@ public:
     bool send(const String& message);
 
     /**
-     * Send a state update to the server.
-     * @param deviceState The device state string (e.g., "awake", "asleep")
+     * Send a bye message to the server before disconnecting.
+     * @param reason The reason for disconnecting (e.g., "sleep", "shutdown", "reboot")
      * @return true if sent successfully
      */
-    bool sendStateUpdate(const String& deviceState);
+    bool sendBye(const String& reason);
 
     /**
      * Handle TCP-layer interrupt from modem.
@@ -122,7 +122,7 @@ private:
     // Message handling
     void processIncomingData();
     void handleMessage(const String& json);
-    void handleAuthResponse(const String& action);
+    void handleAuthResponse(bool ok, const String& reason);
 
     // Telemetry
     void checkTelemetry();

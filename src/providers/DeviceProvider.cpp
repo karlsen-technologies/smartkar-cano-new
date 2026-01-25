@@ -16,6 +16,8 @@ void DeviceProvider::getTelemetry(JsonObject& data) {
         data["batteryVoltage"] = powerManager->getBatteryVoltage();
         data["batteryPercent"] = powerManager->getBatteryPercent();
         data["charging"] = powerManager->isCharging();
+        data["chargingState"] = powerManager->getChargingState();
+        data["chargeCurrentMa"] = powerManager->getChargeCurrentSetting();
         data["vbusConnected"] = powerManager->isVbusConnected();
     }
     

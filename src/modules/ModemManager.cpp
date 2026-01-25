@@ -3,16 +3,23 @@
 #include "../util.h"
 
 #include <Arduino.h>
-#include <StreamDebugger.h>
 
-// Debug output through Serial monitor
+// Set to 1 to see all AT commands in Serial output
+#define MODEM_DEBUG 0
+
+#if MODEM_DEBUG
+#include <StreamDebugger.h>
 StreamDebugger debugger(Serial1, Serial);
+#define MODEM_STREAM debugger
+#else
+#define MODEM_STREAM Serial1
+#endif
 
 ModemManager* ModemManager::_instance = nullptr;
 
 ModemManager::ModemManager(PowerManager* powerManager) 
     : powerManager(powerManager) {
-    modem = new TinyGsm(debugger);
+    modem = new TinyGsm(MODEM_STREAM);
     _instance = this;
 }
 
@@ -103,9 +110,6 @@ void ModemManager::loop() {
             // Terminal states - require manual intervention
             break;
     }
-
-    // Update previous state tracking
-    previousState = state;
 }
 
 void ModemManager::prepareForSleep() {
@@ -187,7 +191,7 @@ bool ModemManager::stateJustChanged() {
 
 void ModemManager::setState(ModemState newState) {
     if (state != newState) {
-        Serial.printf("[MODEM] State: %d -> %d\n", (int)state, (int)newState);
+        Serial.printf("[MODEM] State: %d -> %d\r\n", (int)state, (int)newState);
         previousState = state;
         state = newState;
         stateEntryTime = millis();
@@ -454,8 +458,6 @@ void ModemManager::handleInterrupt() {
     if (!hasInterrupt) return;
     hasInterrupt = false;
 
-    Serial.println("[MODEM] Processing interrupt");
-
     // Check for URC type
     int urc = modem->waitResponse(15L, "+APP", "+CMT:", "+CA");
 
@@ -494,6 +496,4 @@ void ModemManager::handleInterrupt() {
         // LinkManager will poll for this via its own mechanisms
         if (activityCallback) activityCallback();
     }
-
-    Serial.println("[MODEM] Interrupt handled");
 }

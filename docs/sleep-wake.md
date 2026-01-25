@@ -7,8 +7,9 @@ The device is designed for low-power operation in a vehicle environment. It must
 1. Stay awake while the car is active or server commands are being processed
 2. Sleep when inactive to preserve the 12V battery
 3. Wake on modem events (server communication)
-4. Wake on timer (scheduled tasks)
-5. Wake on CAN bus activity (car becoming active) - *future*
+4. Wake on PMU events (power connected, low battery)
+5. Wake on timer (scheduled tasks)
+6. Wake on CAN bus activity (car becoming active) - *future*
 
 ## Current Implementation
 
@@ -17,7 +18,7 @@ The device is designed for low-power operation in a vehicle environment. It must
 Sleep is managed by `DeviceController::canSleep()` which checks:
 
 1. **Minimum awake time** - Device must be awake for at least 10 seconds
-2. **Activity timeout** - No activity for 60 seconds (configurable)
+2. **Activity timeout** - No activity for 5 minutes (configurable)
 3. **Module busy state** - All modules must report not busy
 4. **Explicit request** - `system.sleep` command bypasses timeout checks
 
@@ -57,11 +58,12 @@ Activity is reported for:
 
 ### Wake Sources
 
-Currently configured:
+Currently configured (both set up by PowerManager):
 
 | Source | GPIO | Method | Description |
 |--------|------|--------|-------------|
 | Modem RI | GPIO 3 | EXT1 | Server sent TCP data |
+| PMU IRQ | GPIO 6 | EXT1 | Low battery, USB power change |
 | Timer | - | esp_sleep_enable_timer_wakeup | Optional scheduled wake |
 
 Future:
@@ -81,7 +83,14 @@ switch (cause) {
         wakeCauseString = "timer";
         break;
     case ESP_SLEEP_WAKEUP_EXT1:
-        wakeCauseString = "modem_ri";
+        // Determine which pin triggered
+        int wakePin = powerManager->getWakeupPin();
+        if (wakePin == 3) {
+            wakeCauseString = "modem_ri";
+        } else if (wakePin == 6) {
+            wakeCauseString = "pmu_irq";
+            powerManager->checkPmuWakeupCause();  // Log PMU event
+        }
         break;
     case ESP_SLEEP_WAKEUP_UNDEFINED:
         wakeCauseString = "fresh_boot";
@@ -106,20 +115,63 @@ State → PREPARING_SLEEP
     │   └── (Keep modem powered for RI wake)
     │
     └── powerManager->prepareForSleep()
+        └── Configure EXT1 wake on GPIO3 + GPIO6
     │
     ▼
 State → SLEEPING
     │
-    ├── Configure EXT1 wake on GPIO_NUM_3
     ├── If duration > 0: Configure timer wake
     └── esp_deep_sleep_start()
     │
     ▼
 [DEEP SLEEP]
     │
-    │ Wake event (modem RI, timer)
+    │ Wake event (modem RI, PMU IRQ, timer)
     ▼
 [RESTART - back to INITIALIZING]
+```
+
+## Low Power Mode
+
+When battery drops to 10%, the device enters a special "low power mode" where the modem is disabled to conserve remaining battery.
+
+### Low Battery Response
+
+```
+Battery at 10% → PMU WARNING_LEVEL1_IRQ
+    │
+    ├── DeviceController::handleLowBattery(level=1)
+    │   ├── linkManager->prepareForSleep()  // Disconnect gracefully
+    │   ├── modemManager->disable()         // Turn off modem
+    │   ├── powerManager->enterLowPowerMode()
+    │   └── requestSleep(0)                 // Sleep until interrupt
+    │
+    ▼
+[DEEP SLEEP - modem OFF, lowPowerMode flag SET]
+    │
+    │ Wake (PMU IRQ - USB connected)
+    ▼
+DeviceController::setup()
+    │
+    ├── powerManager->isLowPowerMode() == true
+    │
+    ▼
+handleLowPowerModeWake()
+    │
+    ├── isVbusConnected()? 
+    │   ├── YES → exitLowPowerMode(), setup modem, continue normal
+    │   └── NO  → Go back to sleep immediately (no modem)
+```
+
+### Critical Battery (5%)
+
+If battery hits 5%, emergency shutdown:
+```cpp
+// Level 2 = critical - immediate shutdown
+powerManager->setModemPower(false);
+powerManager->enterLowPowerMode();
+powerManager->enableDeepSleepWakeup();
+esp_deep_sleep_start();
 ```
 
 ## Sleep Command
@@ -184,24 +236,39 @@ Target: < 1mA with modem powered (for RI wake capability)
 | AXP2101 | Quiescent | ~20 µA |
 | SIM7080G | PSM/eDRX | ~100 µA - 1mA |
 
+### Low Power Mode Current
+
+With modem powered off (low battery mode):
+
+| Component | State | Typical Current |
+|-----------|-------|-----------------|
+| ESP32-S3 | Deep sleep | ~7-10 µA |
+| AXP2101 | Quiescent | ~20 µA |
+| SIM7080G | Off | 0 µA |
+
+Total: ~30 µA - can last weeks on remaining battery
+
 ### Modem Power During Sleep
 
-The modem is kept powered during sleep to enable server-initiated wake:
+Normal sleep: Modem is kept powered to enable server-initiated wake:
 - Server sends TCP packet → Modem receives → RI pin goes low → ESP32 wakes
 
-If modem power is turned off:
-- Lower sleep current
+Low power mode: Modem is off to maximize battery life:
 - Cannot wake on server command
-- Only wake via timer or CAN
+- Only wake via PMU IRQ (USB connected) or timer
 
 ## Configuration
 
-### Current (Testing)
+### Current Settings
 
 ```cpp
 // DeviceController.cpp
-#define DEFAULT_ACTIVITY_TIMEOUT    60000   // 1 minute
+#define DEFAULT_ACTIVITY_TIMEOUT    300000  // 5 minutes
 #define DEFAULT_MIN_AWAKE_TIME      10000   // 10 seconds
+
+// PowerManager.cpp
+pmu->setLowBatWarnThreshold(10);     // 10% warning
+pmu->setLowBatShutdownThreshold(5);  // 5% critical
 ```
 
 ### Future (Production)
@@ -227,7 +294,8 @@ Sleep Decision Logic:
 Wake Source Priority:
 1. CAN interrupt → Car activity, stay awake long
 2. Modem RI → Server command, process and maybe sleep again
-3. Timer → Scheduled task, execute and sleep
+3. PMU IRQ → Check if power restored
+4. Timer → Scheduled task, execute and sleep
 ```
 
 ## RTC Memory Persistence
@@ -236,19 +304,19 @@ Data preserved across deep sleep:
 
 ```cpp
 RTC_DATA_ATTR struct {
-    bool modemPowered;      // Modem power state
-    // Future: departure timer, pending commands, etc.
-} rtcData;
+    bool modemPowered;   // Modem power state
+    bool lowPowerMode;   // True when in ultra-low power mode due to low battery
+} rtcConfig;
 ```
 
-This enables "hot start" - when the device wakes, if the modem was powered before sleep, it can communicate immediately without full initialization.
+This enables:
+- "Hot start" - modem communication without full init
+- Low power mode tracking - don't start modem if battery still low
 
 ## Known Limitations
 
-1. **Fixed timeout** - Currently uses fixed 60-second timeout (testing). Production should be CAN-activity based.
+1. **No CAN wake** - CAN bus integration not yet implemented.
 
-2. **No CAN wake** - CAN bus integration not yet implemented.
+2. **No scheduled wake** - Timer wake is implemented but no scheduling system yet.
 
-3. **Modem always powered** - Cannot fully power off modem while maintaining server wake capability.
-
-4. **No scheduled wake** - Timer wake is implemented but no scheduling system yet.
+3. **Low battery event may be missed** - If battery drops from >10% to <5% while sleeping (unlikely), we may miss the 10% warning and only get the 5% critical.

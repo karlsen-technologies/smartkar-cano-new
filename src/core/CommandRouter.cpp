@@ -22,13 +22,13 @@ bool CommandRouter::registerHandler(ICommandHandler* handler) {
     // Check for duplicate domain
     for (size_t i = 0; i < handlerCount; i++) {
         if (strcmp(handlers[i]->getDomain(), handler->getDomain()) == 0) {
-            Serial.printf("[ROUTER] Handler for domain '%s' already registered\n", handler->getDomain());
+            Serial.printf("[ROUTER] Handler for domain '%s' already registered\r\n", handler->getDomain());
             return false;
         }
     }
     
     handlers[handlerCount++] = handler;
-    Serial.printf("[ROUTER] Registered handler for domain '%s'\n", handler->getDomain());
+    Serial.printf("[ROUTER] Registered handler for domain '%s'\r\n", handler->getDomain());
     return true;
 }
 
@@ -38,12 +38,12 @@ bool CommandRouter::registerProvider(ITelemetryProvider* provider) {
     }
     
     providers[providerCount++] = provider;
-    Serial.printf("[ROUTER] Registered telemetry provider '%s'\n", provider->getTelemetryDomain());
+    Serial.printf("[ROUTER] Registered telemetry provider '%s'\r\n", provider->getTelemetryDomain());
     return true;
 }
 
 void CommandRouter::handleCommand(const String& action, int id, JsonObject& params) {
-    Serial.printf("[ROUTER] Command: %s (id=%d)\n", action.c_str(), id);
+    Serial.printf("[ROUTER] Command: %s (id=%d)\r\n", action.c_str(), id);
     
     // Try built-in system commands first
     if (handleSystemCommand(action, id, params)) {
@@ -85,7 +85,7 @@ String CommandRouter::collectTelemetry(bool onlyChanged) {
     }
     
     JsonDocument doc;
-    doc["type"] = "telemetry";
+    doc["type"] = "state";
     JsonObject data = doc["data"].to<JsonObject>();
     
     bool hasData = false;
@@ -154,10 +154,13 @@ void CommandRouter::sendEvent(const char* domain, const char* event, JsonObject*
     doc["type"] = "event";
     JsonObject data = doc["data"].to<JsonObject>();
     data["domain"] = domain;
-    data["event"] = event;
+    data["name"] = event;  // Protocol v2: use "name" instead of "event"
     
+    // Flatten details into data (Protocol v2)
     if (details) {
-        data["details"] = *details;
+        for (JsonPair kv : *details) {
+            data[kv.key()] = kv.value();
+        }
     }
     
     String output;
@@ -198,25 +201,38 @@ void CommandRouter::sendResponse(int id, CommandStatus status, const char* messa
     JsonObject respData = doc["data"].to<JsonObject>();
     respData["id"] = id;
     
-    // Map status to string
-    const char* statusStr;
-    switch (status) {
-        case CommandStatus::OK:             statusStr = "ok"; break;
-        case CommandStatus::PENDING:        statusStr = "pending"; break;
-        case CommandStatus::INVALID_PARAMS: statusStr = "invalid_params"; break;
-        case CommandStatus::NOT_SUPPORTED:  statusStr = "not_supported"; break;
-        case CommandStatus::BUSY:           statusStr = "busy"; break;
-        case CommandStatus::CMD_ERROR:
-        default:                            statusStr = "error"; break;
+    // Protocol v2: ok boolean + status string for non-ok responses
+    bool ok = (status == CommandStatus::OK);
+    respData["ok"] = ok;
+    
+    if (!ok) {
+        // Map status to string for error cases
+        const char* statusStr;
+        switch (status) {
+            case CommandStatus::PENDING:        statusStr = "pending"; break;
+            case CommandStatus::INVALID_PARAMS: statusStr = "error"; break;
+            case CommandStatus::NOT_SUPPORTED:  statusStr = "not_supported"; break;
+            case CommandStatus::BUSY:           statusStr = "error"; break;
+            case CommandStatus::CMD_ERROR:
+            default:                            statusStr = "error"; break;
+        }
+        respData["status"] = statusStr;
     }
-    respData["status"] = statusStr;
     
     if (message && strlen(message) > 0) {
-        respData["message"] = message;
+        if (ok) {
+            respData["message"] = message;
+        } else {
+            respData["error"] = message;
+        }
     }
     
+    // Flatten response data into respData (Protocol v2)
     if (data && data->size() > 0) {
-        respData["data"] = *data;
+        JsonObject dataObj = data->as<JsonObject>();
+        for (JsonPair kv : dataObj) {
+            respData[kv.key()] = kv.value();
+        }
     }
     
     String output;

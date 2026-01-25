@@ -137,8 +137,11 @@ private:
     void prepareForSleep();
     void enterSleep();
     void logWakeupCause();
+    void handleLowPowerModeWake();
+    void handleLowBattery(uint8_t level);
 
     // Static callback wrapper for activity reporting
     static DeviceController* instance;
     static void activityCallbackWrapper();
+    static void lowBatteryCallbackWrapper(uint8_t level);
 };

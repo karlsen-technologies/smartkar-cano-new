@@ -94,10 +94,23 @@ The project has been refactored to a modular architecture with:
 - [x] Request sleep via command
 - [x] Timer wake source support
 
+### Phase 5: Battery & Low Power
+- [x] Configure 18650 battery charging (4.2V target, 500mA, TS pin disabled)
+- [x] Add battery monitoring (voltage, percent, charging state)
+- [x] Add periodic battery status logging
+- [x] Enable PMU IRQ for low battery warnings (10%, 5%)
+- [x] Add GPIO6 (PMU IRQ) as EXT1 wake source
+- [x] Implement low power mode (modem off when battery critical)
+- [x] Detect PMU IRQ wake and check cause
+- [x] Handle low battery: disconnect, disable modem, sleep
+- [x] On wake from low power mode, check VBUS before enabling modem
+
 ### Documentation
 - [x] Update README.md
 - [x] Update architecture.md
 - [x] Create protocol.md (comprehensive protocol spec)
+- [x] Update power-manager.md
+- [x] Update sleep-wake.md
 - [x] Update TODO.md
 
 ## Design Notes
