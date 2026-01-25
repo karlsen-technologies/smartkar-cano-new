@@ -16,17 +16,17 @@
 #define MODEM_CONNECTED_DELAY SECONDS(10)
 
 enum class ModemState {
-    MODEM_READY, // 0
-    MODEM_DISABLED , // 1
-    MODEM_STARTING, // 2
-    MODEM_HOTSTART, // 3
-    MODEM_TIMEOUT, // 4 Currently unsued, needs to be implemented
-    MODEM_NOSIM, // 5
-    MODEM_SEARCHING, // 6
-    MODEM_REGISTERED, // 7
-    MODEM_UNREGISTERED, // 8
-    MODEM_DENIED, // 9
-    MODEM_CONNECTED, // 10
+    MODEM_READY,        // Initial state before setup
+    MODEM_DISABLED,     // Modem is powered off
+    MODEM_STARTING,     // Modem is powering on and configuring
+    MODEM_HOTSTART,     // Modem was already powered (wake from sleep)
+    MODEM_TIMEOUT,      // Reserved: timeout during network search
+    MODEM_NOSIM,        // No SIM card detected
+    MODEM_SEARCHING,    // Searching for network
+    MODEM_REGISTERED,   // Registered to network, not yet connected
+    MODEM_UNREGISTERED, // Lost network registration
+    MODEM_DENIED,       // Network registration denied
+    MODEM_CONNECTED,    // Connected to internet (GPRS/LTE)
 };
 
 class Modem {
@@ -55,7 +55,7 @@ class Modem {
 
         void enableInterrupt();
         void disableInterrupt();
-        void onModemInterrupt();
+        void IRAM_ATTR onModemInterrupt();
         void handleModemInterrupt();
 
         String getSimCCID();
@@ -68,7 +68,6 @@ class Modem {
         bool hasModemInterrupt = false;
 
         unsigned long last_loop = 0;
-        int modemStartAttempts = 0;
 
         ModemState previousLoopState = ModemState::MODEM_READY;
 

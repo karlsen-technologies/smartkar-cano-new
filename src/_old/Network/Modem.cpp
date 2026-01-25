@@ -52,8 +52,7 @@ void Modem::disableInterrupt() {
     detachInterrupt(digitalPinToInterrupt(GPIO_NUM_3));
 }
 
-void Modem::onModemInterrupt() {
-    Serial.println("[MODEM] Modem interrupt trigger!");
+void IRAM_ATTR Modem::onModemInterrupt() {
     this->hasModemInterrupt = true;
 }
 

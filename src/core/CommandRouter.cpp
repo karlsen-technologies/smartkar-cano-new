@@ -1,0 +1,269 @@
+#include "CommandRouter.h"
+
+CommandRouter* CommandRouter::_instance = nullptr;
+
+CommandRouter::CommandRouter() {
+    _instance = this;
+    
+    // Initialize arrays
+    for (size_t i = 0; i < MAX_COMMAND_HANDLERS; i++) {
+        handlers[i] = nullptr;
+    }
+    for (size_t i = 0; i < MAX_TELEMETRY_PROVIDERS; i++) {
+        providers[i] = nullptr;
+    }
+}
+
+bool CommandRouter::registerHandler(ICommandHandler* handler) {
+    if (!handler || handlerCount >= MAX_COMMAND_HANDLERS) {
+        return false;
+    }
+    
+    // Check for duplicate domain
+    for (size_t i = 0; i < handlerCount; i++) {
+        if (strcmp(handlers[i]->getDomain(), handler->getDomain()) == 0) {
+            Serial.printf("[ROUTER] Handler for domain '%s' already registered\n", handler->getDomain());
+            return false;
+        }
+    }
+    
+    handlers[handlerCount++] = handler;
+    Serial.printf("[ROUTER] Registered handler for domain '%s'\n", handler->getDomain());
+    return true;
+}
+
+bool CommandRouter::registerProvider(ITelemetryProvider* provider) {
+    if (!provider || providerCount >= MAX_TELEMETRY_PROVIDERS) {
+        return false;
+    }
+    
+    providers[providerCount++] = provider;
+    Serial.printf("[ROUTER] Registered telemetry provider '%s'\n", provider->getTelemetryDomain());
+    return true;
+}
+
+void CommandRouter::handleCommand(const String& action, int id, JsonObject& params) {
+    Serial.printf("[ROUTER] Command: %s (id=%d)\n", action.c_str(), id);
+    
+    // Try built-in system commands first
+    if (handleSystemCommand(action, id, params)) {
+        return;
+    }
+    
+    // Parse action into domain.actionName
+    String domain, actionName;
+    if (!parseAction(action, domain, actionName)) {
+        // No domain prefix - try as system command
+        sendResponse(id, CommandStatus::NOT_SUPPORTED, "Unknown command format");
+        return;
+    }
+    
+    // Find handler for domain
+    ICommandHandler* handler = findHandler(domain);
+    if (!handler) {
+        sendResponse(id, CommandStatus::NOT_SUPPORTED, "Unknown domain");
+        return;
+    }
+    
+    // Create command context
+    CommandContext ctx(id, action, domain, actionName, params);
+    ctx.sendAsyncResponse = asyncResponseCallback;
+    
+    // Execute command
+    CommandResult result = handler->handleCommand(ctx);
+    
+    // Send response (unless async)
+    if (result.status != CommandStatus::PENDING) {
+        sendResponse(id, result.status, result.message.c_str(), 
+                     result.data.size() > 0 ? &result.data : nullptr);
+    }
+}
+
+String CommandRouter::collectTelemetry(bool onlyChanged) {
+    if (providerCount == 0) {
+        return "";
+    }
+    
+    JsonDocument doc;
+    doc["type"] = "telemetry";
+    JsonObject data = doc["data"].to<JsonObject>();
+    
+    bool hasData = false;
+    
+    for (size_t i = 0; i < providerCount; i++) {
+        ITelemetryProvider* provider = providers[i];
+        
+        if (onlyChanged && !provider->hasChanged()) {
+            continue;
+        }
+        
+        JsonObject domainData = data[provider->getTelemetryDomain()].to<JsonObject>();
+        provider->getTelemetry(domainData);
+        provider->onTelemetrySent();
+        hasData = true;
+    }
+    
+    if (!hasData) {
+        return "";
+    }
+    
+    String output;
+    serializeJson(doc, output);
+    return output;
+}
+
+TelemetryPriority CommandRouter::getHighestPriority() {
+    TelemetryPriority highest = TelemetryPriority::PRIORITY_LOW;
+    
+    for (size_t i = 0; i < providerCount; i++) {
+        if (providers[i]->hasChanged()) {
+            TelemetryPriority p = providers[i]->getPriority();
+            if (p > highest) {
+                highest = p;
+            }
+        }
+    }
+    
+    return highest;
+}
+
+void CommandRouter::getCapabilities(JsonDocument& doc) {
+    JsonObject domains = doc["domains"].to<JsonObject>();
+    
+    for (size_t i = 0; i < handlerCount; i++) {
+        ICommandHandler* handler = handlers[i];
+        size_t actionCount = 0;
+        const char** actions = handler->getSupportedActions(actionCount);
+        
+        JsonArray domainActions = domains[handler->getDomain()].to<JsonArray>();
+        for (size_t j = 0; j < actionCount; j++) {
+            domainActions.add(actions[j]);
+        }
+    }
+    
+    JsonArray telemetry = doc["telemetry"].to<JsonArray>();
+    for (size_t i = 0; i < providerCount; i++) {
+        telemetry.add(providers[i]->getTelemetryDomain());
+    }
+}
+
+void CommandRouter::sendEvent(const char* domain, const char* event, JsonObject* details) {
+    if (!responseSender) return;
+    
+    JsonDocument doc;
+    doc["type"] = "event";
+    JsonObject data = doc["data"].to<JsonObject>();
+    data["domain"] = domain;
+    data["event"] = event;
+    
+    if (details) {
+        data["details"] = *details;
+    }
+    
+    String output;
+    serializeJson(doc, output);
+    responseSender(output);
+}
+
+// Private methods
+
+ICommandHandler* CommandRouter::findHandler(const String& domain) {
+    for (size_t i = 0; i < handlerCount; i++) {
+        if (domain.equals(handlers[i]->getDomain())) {
+            return handlers[i];
+        }
+    }
+    return nullptr;
+}
+
+bool CommandRouter::parseAction(const String& action, String& domain, String& actionName) {
+    int dotIndex = action.indexOf('.');
+    if (dotIndex <= 0 || dotIndex >= (int)action.length() - 1) {
+        return false;
+    }
+    
+    domain = action.substring(0, dotIndex);
+    actionName = action.substring(dotIndex + 1);
+    return true;
+}
+
+void CommandRouter::sendResponse(int id, CommandStatus status, const char* message, JsonDocument* data) {
+    if (!responseSender) {
+        Serial.println("[ROUTER] No response sender configured");
+        return;
+    }
+    
+    JsonDocument doc;
+    doc["type"] = "response";
+    JsonObject respData = doc["data"].to<JsonObject>();
+    respData["id"] = id;
+    
+    // Map status to string
+    const char* statusStr;
+    switch (status) {
+        case CommandStatus::OK:             statusStr = "ok"; break;
+        case CommandStatus::PENDING:        statusStr = "pending"; break;
+        case CommandStatus::INVALID_PARAMS: statusStr = "invalid_params"; break;
+        case CommandStatus::NOT_SUPPORTED:  statusStr = "not_supported"; break;
+        case CommandStatus::BUSY:           statusStr = "busy"; break;
+        case CommandStatus::CMD_ERROR:
+        default:                            statusStr = "error"; break;
+    }
+    respData["status"] = statusStr;
+    
+    if (message && strlen(message) > 0) {
+        respData["message"] = message;
+    }
+    
+    if (data && data->size() > 0) {
+        respData["data"] = *data;
+    }
+    
+    String output;
+    serializeJson(doc, output);
+    responseSender(output);
+}
+
+bool CommandRouter::handleSystemCommand(const String& action, int id, JsonObject& params) {
+    if (action == "ping") {
+        JsonDocument data;
+        data["pong"] = true;
+        data["time"] = millis();
+        sendResponse(id, CommandStatus::OK, nullptr, &data);
+        return true;
+    }
+    
+    if (action == "status") {
+        JsonDocument data;
+        data["uptime"] = millis();
+        data["freeHeap"] = ESP.getFreeHeap();
+        sendResponse(id, CommandStatus::OK, nullptr, &data);
+        return true;
+    }
+    
+    if (action == "capabilities") {
+        JsonDocument data;
+        getCapabilities(data);
+        sendResponse(id, CommandStatus::OK, nullptr, &data);
+        return true;
+    }
+    
+    if (action == "telemetry") {
+        // Force immediate telemetry send
+        String telemetry = collectTelemetry(false);
+        if (telemetry.length() > 0 && responseSender) {
+            responseSender(telemetry);
+        }
+        sendResponse(id, CommandStatus::OK);
+        return true;
+    }
+    
+    return false;
+}
+
+void CommandRouter::asyncResponseCallback(int id, CommandResult result) {
+    if (_instance) {
+        _instance->sendResponse(id, result.status, result.message.c_str(),
+                               result.data.size() > 0 ? &result.data : nullptr);
+    }
+}
