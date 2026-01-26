@@ -155,4 +155,8 @@ private:
     static volatile bool pmuIrqTriggered;
     static void IRAM_ATTR pmuIrqHandler();
     void handlePmuIrq();
+    
+    // IRQ configuration for different power states
+    void configureAwakeIrqs();   // Full IRQ set for logging while awake
+    void configureSleepIrqs();   // Minimal IRQ set to avoid unnecessary wakes
 };

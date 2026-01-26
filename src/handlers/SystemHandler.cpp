@@ -1,6 +1,7 @@
 #include "SystemHandler.h"
 #include "../core/DeviceController.h"
 #include "../core/CommandRouter.h"
+#include "../modules/LinkManager.h"
 
 // Static action list
 const char* SystemHandler::supportedActions[] = {
@@ -95,27 +96,23 @@ CommandResult SystemHandler::handleWakeup(CommandContext& ctx) {
 CommandResult SystemHandler::handleTelemetry(CommandContext& ctx) {
     Serial.println("[SYSTEM] Forcing telemetry send...");
     
-    if (!commandRouter) {
-        return CommandResult::error("CommandRouter not available");
+    if (!deviceController) {
+        return CommandResult::error("DeviceController not available");
     }
     
-    // Collect and send telemetry immediately (include unchanged data)
-    String telemetry = commandRouter->collectTelemetry(false);
-    
-    if (telemetry.length() == 0) {
-        return CommandResult::ok("No telemetry providers registered");
+    LinkManager* linkManager = deviceController->getLinkManager();
+    if (!linkManager) {
+        return CommandResult::error("LinkManager not available");
     }
     
-    // The telemetry is collected but not sent here - that happens
-    // through the normal LinkManager flow. However, collectTelemetry(false)
-    // forces collection of all data regardless of hasChanged().
+    // Force immediate telemetry send (include all data, not just changed)
+    bool sent = linkManager->sendTelemetryNow(false);
     
-    // We could also trigger the LinkManager to send it, but for now
-    // the response confirms the collection happened.
-    
-    CommandResult result = CommandResult::ok("Telemetry collected");
-    result.data["collected"] = true;
-    return result;
+    if (sent) {
+        return CommandResult::ok("Telemetry sent");
+    } else {
+        return CommandResult::error("Failed to send telemetry");
+    }
 }
 
 CommandResult SystemHandler::handleInfo(CommandContext& ctx) {

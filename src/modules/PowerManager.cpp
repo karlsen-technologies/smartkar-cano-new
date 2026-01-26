@@ -84,15 +84,9 @@ bool PowerManager::setup() {
     pmu->setLowBatWarnThreshold(10);
     pmu->setLowBatShutdownThreshold(5);
 
-    // Enable PMU IRQs for low battery warnings
-    pmu->disableIRQ(XPOWERS_AXP2101_ALL_IRQ);  // Disable all first
-    pmu->enableIRQ(XPOWERS_AXP2101_WARNING_LEVEL1_IRQ);  // 10% warning
-    pmu->enableIRQ(XPOWERS_AXP2101_WARNING_LEVEL2_IRQ);  // 5% critical
-    pmu->enableIRQ(XPOWERS_AXP2101_BAT_INSERT_IRQ);      // Battery inserted
-    pmu->enableIRQ(XPOWERS_AXP2101_BAT_REMOVE_IRQ);      // Battery removed
-    pmu->enableIRQ(XPOWERS_AXP2101_VBUS_INSERT_IRQ);     // USB connected
-    pmu->enableIRQ(XPOWERS_AXP2101_VBUS_REMOVE_IRQ);     // USB disconnected
-    pmu->clearIrqStatus();  // Clear any pending IRQs
+    // Enable PMU IRQs for normal (awake) operation
+    // These include informational events that we want to log while awake
+    configureAwakeIrqs();
     
     // Setup PMU IRQ pin interrupt
     pinMode(PMU_INPUT_PIN, INPUT);
@@ -139,6 +133,9 @@ void PowerManager::loop() {
 
 void PowerManager::prepareForSleep() {
     Serial.println("[POWER] Preparing for sleep");
+    
+    // Switch to minimal IRQ set for sleep - only critical events
+    configureSleepIrqs();
     
     // Enable wakeup source before sleep
     enableDeepSleepWakeup();
@@ -311,7 +308,7 @@ void PowerManager::handlePmuIrq() {
     if (irqStatus & XPOWERS_AXP2101_WARNING_LEVEL1_IRQ) {
         uint8_t percent = pmu->getBatteryPercent();
         uint16_t voltage = pmu->getBattVoltage();
-        Serial.printf("[POWER] ⚠️  LOW BATTERY WARNING: %u%% (%umV)\r\n", percent, voltage);
+        Serial.printf("[POWER] LOW BATTERY WARNING: %u%% (%umV)\r\n", percent, voltage);
         
         if (lowBatteryCallback) {
             lowBatteryCallback(1);  // Level 1 = warning
@@ -322,7 +319,7 @@ void PowerManager::handlePmuIrq() {
     if (irqStatus & XPOWERS_AXP2101_WARNING_LEVEL2_IRQ) {
         uint8_t percent = pmu->getBatteryPercent();
         uint16_t voltage = pmu->getBattVoltage();
-        Serial.printf("[POWER] 🔴 CRITICAL BATTERY: %u%% (%umV) - SHUTDOWN IMMINENT\r\n", percent, voltage);
+        Serial.printf("[POWER] CRITICAL BATTERY: %u%% (%umV) - SHUTDOWN IMMINENT\r\n", percent, voltage);
         
         if (lowBatteryCallback) {
             lowBatteryCallback(2);  // Level 2 = critical
@@ -349,6 +346,56 @@ void PowerManager::handlePmuIrq() {
     if (irqStatus & XPOWERS_AXP2101_VBUS_REMOVE_IRQ) {
         Serial.println("[POWER] USB power disconnected");
     }
+    
+    // Charging events (informational)
+    if (irqStatus & XPOWERS_AXP2101_BAT_CHG_START_IRQ) {
+        Serial.println("[POWER] Charging started");
+    }
+    
+    if (irqStatus & XPOWERS_AXP2101_BAT_CHG_DONE_IRQ) {
+        Serial.println("[POWER] Charging complete");
+    }
+}
+
+// ============== IRQ Configuration ==============
+
+void PowerManager::configureAwakeIrqs() {
+    if (!pmu) return;
+    
+    // While awake, enable all useful IRQs for logging and monitoring
+    pmu->disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
+    pmu->enableIRQ(XPOWERS_AXP2101_WARNING_LEVEL1_IRQ);  // 10% warning - critical
+    pmu->enableIRQ(XPOWERS_AXP2101_WARNING_LEVEL2_IRQ);  // 5% critical - critical
+    pmu->enableIRQ(XPOWERS_AXP2101_BAT_INSERT_IRQ);      // Battery inserted - informational
+    pmu->enableIRQ(XPOWERS_AXP2101_BAT_REMOVE_IRQ);      // Battery removed - informational
+    pmu->enableIRQ(XPOWERS_AXP2101_VBUS_INSERT_IRQ);     // USB connected - informational
+    pmu->enableIRQ(XPOWERS_AXP2101_VBUS_REMOVE_IRQ);     // USB disconnected - informational
+    pmu->enableIRQ(XPOWERS_AXP2101_BAT_CHG_START_IRQ);   // Charging started - informational
+    pmu->enableIRQ(XPOWERS_AXP2101_BAT_CHG_DONE_IRQ);    // Charging complete - informational
+    pmu->clearIrqStatus();
+    
+    Serial.println("[POWER] Configured awake IRQs (full set)");
+}
+
+void PowerManager::configureSleepIrqs() {
+    if (!pmu) return;
+    
+    // During sleep, only enable critical IRQs that should wake the device:
+    // - Low battery warnings (need to handle power saving)
+    // - VBUS insert (car power restored - useful in low power mode)
+    // 
+    // Do NOT enable during sleep:
+    // - BAT_INSERT/REMOVE (won't happen in deployed car)
+    // - VBUS_REMOVE (don't need to wake when power is cut, just keep sleeping)
+    // - CHG_START/DONE (will fire repeatedly as battery tops off, wasting power)
+    
+    pmu->disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
+    pmu->enableIRQ(XPOWERS_AXP2101_WARNING_LEVEL1_IRQ);  // 10% warning
+    pmu->enableIRQ(XPOWERS_AXP2101_WARNING_LEVEL2_IRQ);  // 5% critical
+    pmu->enableIRQ(XPOWERS_AXP2101_VBUS_INSERT_IRQ);     // Power restored (for low power mode recovery)
+    pmu->clearIrqStatus();
+    
+    Serial.println("[POWER] Configured sleep IRQs (minimal set)");
 }
 
 // ============== Low Power Mode Methods ==============

@@ -148,7 +148,9 @@ bool LinkManager::send(const String& message) {
     
     client->println(message);
     
-    if (activityCallback) activityCallback();
+    // NOTE: We intentionally do NOT call activityCallback here.
+    // Outbound messages (telemetry) should not reset the sleep timer.
+    // Only incoming messages from server should keep the device awake.
     
     return true;
 }
@@ -165,9 +167,37 @@ bool LinkManager::sendBye(const String& reason) {
     
     client->println(msg);
     
-    if (activityCallback) activityCallback();
+    // NOTE: We intentionally do NOT call activityCallback here.
+    // Sending bye is the last thing before sleep, should not reset timer.
     
     return true;
+}
+
+bool LinkManager::sendTelemetryNow(bool changedOnly) {
+    if (!commandRouter) {
+        Serial.println("[LINK] No command router for telemetry");
+        return false;
+    }
+    
+    if (state != LinkState::CONNECTED || !client || !client->connected()) {
+        Serial.println("[LINK] Cannot send telemetry - not connected");
+        return false;
+    }
+    
+    String telemetry = commandRouter->collectTelemetry(changedOnly);
+    if (telemetry.length() == 0) {
+        Serial.println("[LINK] No telemetry to send");
+        return false;
+    }
+    
+    Serial.println("[LINK] Sending telemetry now");
+    bool sent = send(telemetry);
+    
+    if (sent) {
+        lastTelemetryTime = millis();
+    }
+    
+    return sent;
 }
 
 void LinkManager::handleTCPInterrupt() {
