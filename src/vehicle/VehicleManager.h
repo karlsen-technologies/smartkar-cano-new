@@ -138,7 +138,22 @@ private:
     
     // Statistics
     unsigned long lastLogTime = 0;
-    static constexpr unsigned long LOG_INTERVAL = 30000;  // Log stats every 30s
+    static constexpr unsigned long LOG_INTERVAL = 10000;  // Log stats every 10s (for testing)
     
+    // Frame counters per domain (for debugging)
+    uint32_t bodyFrames = 0;
+    uint32_t batteryFrames = 0;
+    uint32_t driveFrames = 0;
+    uint32_t climateFrames = 0;
+    uint32_t unhandledFrames = 0;
+    
+    // Track unique CAN IDs seen (for debugging)
+    static constexpr size_t MAX_TRACKED_IDS = 64;
+    uint32_t seenCanIds[MAX_TRACKED_IDS] = {0};
+    uint32_t seenIdCounts[MAX_TRACKED_IDS] = {0};
+    uint8_t seenIdDlcs[MAX_TRACKED_IDS] = {0};  // Track DLC of each ID
+    size_t numSeenIds = 0;
+    
+    void trackCanId(uint32_t canId, uint8_t dlc);
     void logStatistics();
 };

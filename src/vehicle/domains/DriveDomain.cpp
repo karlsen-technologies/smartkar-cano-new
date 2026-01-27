@@ -14,22 +14,27 @@ bool DriveDomain::handlesCanId(uint32_t canId) const {
 }
 
 bool DriveDomain::processFrame(uint32_t canId, const uint8_t* data, uint8_t dlc) {
-    if (dlc < 8) {
-        return false;
-    }
-    
     switch (canId) {
         case CAN_ID_IGNITION:
-            processIgnition(data);
-            return true;
+            if (dlc >= 4) {  // 0x3C0 is only 4 bytes
+                processIgnition(data);
+                return true;
+            }
+            return false;
             
         case CAN_ID_SPEED:
-            processSpeed(data);
-            return true;
+            if (dlc >= 8) {
+                processSpeed(data);
+                return true;
+            }
+            return false;
             
         case CAN_ID_DIAGNOSE:
-            processDiagnose(data);
-            return true;
+            if (dlc >= 8) {
+                processDiagnose(data);
+                return true;
+            }
+            return false;
             
         default:
             return false;

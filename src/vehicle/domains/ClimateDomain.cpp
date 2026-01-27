@@ -8,7 +8,8 @@ ClimateDomain::ClimateDomain(VehicleState& state, VehicleManager* manager)
 }
 
 bool ClimateDomain::handlesCanId(uint32_t canId) const {
-    return canId == CAN_ID_KLIMA_03;
+    return canId == CAN_ID_KLIMA_03 ||
+           canId == CAN_ID_KLIMA_SENSOR_02;
 }
 
 bool ClimateDomain::processFrame(uint32_t canId, const uint8_t* data, uint8_t dlc) {
@@ -21,13 +22,17 @@ bool ClimateDomain::processFrame(uint32_t canId, const uint8_t* data, uint8_t dl
             processKlima03(data);
             return true;
             
+        case CAN_ID_KLIMA_SENSOR_02:
+            processKlimaSensor02(data);
+            return true;
+            
         default:
             return false;
     }
 }
 
 void ClimateDomain::processKlima03(const uint8_t* data) {
-    // Klima_03 (0x66E) - Climate status
+    // Klima_03 (0x66E) - Climate status and inside temperature
     BroadcastDecoder::KlimaData decoded = BroadcastDecoder::decodeKlima03(data);
     
     ClimateState& climate = vehicleState.climate;
@@ -48,14 +53,22 @@ void ClimateDomain::processKlima03(const uint8_t* data) {
         Serial.printf("[ClimateDomain] Standby ventilation: %s\r\n", 
             decoded.standbyVentActive ? "ON" : "OFF");
     }
+}
+
+void ClimateDomain::processKlimaSensor02(const uint8_t* data) {
+    // Klima_Sensor_02 (0x5E1) - Outside temperature
+    // BCM1_Aussen_Temp_ungef: Byte 0, scale 0.5, offset -50
+    uint8_t rawTemp = data[0];
+    float outsideTemp = rawTemp * 0.5f - 50.0f;
     
-    // Log temperature occasionally
-    static unsigned long lastLog = 0;
-    static float lastTemp = 0;
+    ClimateState& climate = vehicleState.climate;
+    float prevTemp = climate.outsideTemp;
     
-    if (millis() - lastLog > 60000 || abs(climate.insideTemp - lastTemp) > 1.0) {
-        Serial.printf("[ClimateDomain] Inside temp: %.1f°C\r\n", climate.insideTemp);
-        lastLog = millis();
-        lastTemp = climate.insideTemp;
+    climate.outsideTemp = outsideTemp;
+    climate.outsideTempUpdate = millis();
+    
+    // Log on significant change
+    if (abs(outsideTemp - prevTemp) > 1.0f) {
+        Serial.printf("[ClimateDomain] Outside temp: %.1f°C\r\n", outsideTemp);
     }
 }

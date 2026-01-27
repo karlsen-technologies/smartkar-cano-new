@@ -8,25 +8,22 @@
 class VehicleManager;
 
 /**
- * BatteryDomain - Handles HV battery and DCDC converter data
+ * BatteryDomain - Handles HV battery data available on comfort CAN
  * 
  * Listens to:
- *   0x191 (BMS_01)  - Core battery data: voltage, current, hi-res SOC
- *   0x509 (BMS_10)  - Usable SOC, energy content
- *   0x5CA (BMS_07)  - Charging status, balancing
+ *   0x5CA (BMS_07)  - Charging status, balancing, energy content
  *   0x59E (BMS_06)  - Battery temperature
- *   0x2AE (DCDC_01) - DC-DC converter: 12V voltage, current
+ * 
+ * NOTE: Core battery signals (0x191, 0x509, 0x2AE) are NOT on comfort CAN!
+ * They are on the powertrain CAN bus. For SOC%, use BAP protocol instead.
  * 
  * No commands - this is a read-only domain.
  */
 class BatteryDomain {
 public:
-    // CAN IDs this domain handles
-    static constexpr uint32_t CAN_ID_BMS_01 = 0x191;    // Core battery data
-    static constexpr uint32_t CAN_ID_BMS_10 = 0x509;    // Usable SOC/energy
-    static constexpr uint32_t CAN_ID_BMS_07 = 0x5CA;    // Charging status
+    // CAN IDs this domain handles (comfort CAN only)
+    static constexpr uint32_t CAN_ID_BMS_07 = 0x5CA;    // Charging status, energy
     static constexpr uint32_t CAN_ID_BMS_06 = 0x59E;    // Battery temperature
-    static constexpr uint32_t CAN_ID_DCDC_01 = 0x2AE;   // DC-DC converter
     
     /**
      * Construct the battery domain.
@@ -53,29 +50,14 @@ public:
     // Status getters (convenience methods)
     // =========================================================================
     
-    // From BMS_01
-    float voltage() const { return vehicleState.battery.voltage; }
-    float current() const { return vehicleState.battery.current; }
-    float socHiRes() const { return vehicleState.battery.socHiRes; }
-    
-    // From BMS_10
-    float usableSoc() const { return vehicleState.battery.usableSoc; }
+    // From BMS_07 (0x5CA)
+    bool isCharging() const { return vehicleState.battery.chargingActive; }
+    bool isBalancing() const { return vehicleState.battery.balancingActive; }
     float energyWh() const { return vehicleState.battery.energyWh; }
     float maxEnergyWh() const { return vehicleState.battery.maxEnergyWh; }
     
-    // From BMS_07
-    bool isCharging() const { return vehicleState.battery.chargingActive; }
-    bool isBalancing() const { return vehicleState.battery.balancingActive; }
-    
-    // From BMS_06
+    // From BMS_06 (0x59E)
     float temperature() const { return vehicleState.battery.temperature; }
-    
-    // From DCDC_01
-    float dcdc12v() const { return vehicleState.battery.dcdc12v; }
-    float dcdcCurrent() const { return vehicleState.battery.dcdcCurrent; }
-    
-    // Computed values
-    float powerKw() const { return vehicleState.battery.power() / 1000.0f; }
     
     /**
      * Calculate energy percentage (current/max).
@@ -87,14 +69,21 @@ public:
         return 0.0f;
     }
     
+    // Frame counters for debugging
+    uint32_t bms07Count = 0;
+    uint32_t bms06Count = 0;
+    
+public:
+    // Debug: get frame counts
+    void getFrameCounts(uint32_t& bms07, uint32_t& bms06) const {
+        bms07 = bms07Count; bms06 = bms06Count;
+    }
+    
 private:
     VehicleState& vehicleState;
     VehicleManager* vehicleManager;  // Not used currently, but kept for consistency
     
     // Process specific message types
-    void processBMS01(const uint8_t* data);
-    void processBMS10(const uint8_t* data);
     void processBMS07(const uint8_t* data);
     void processBMS06(const uint8_t* data);
-    void processDCDC01(const uint8_t* data);
 };
