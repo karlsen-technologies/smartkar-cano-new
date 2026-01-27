@@ -264,15 +264,144 @@ struct RangeState {
 };
 
 /**
+ * BAP Plug State (from BAP function 0x10)
+ * Updated passively by listening to BAP responses
+ */
+struct BapPlugState {
+    uint8_t lockSetup = 0;
+    uint8_t lockState = 0;         // 0=unlocked, 1=locked, 2=error
+    uint8_t supplyState = 0x0F;    // 0=inactive, 1=active, 2=station connected, F=init
+    uint8_t plugState = 0x0F;      // 0=unplugged, 1=plugged, F=init
+    unsigned long lastUpdate = 0;
+    
+    bool isPlugged() const { return plugState == 0x01; }
+    bool hasSupply() const { return supplyState == 0x01 || supplyState == 0x02; }
+    bool isValid() const { return plugState != 0x0F; }
+    
+    const char* plugStateStr() const {
+        switch (plugState) {
+            case 0x00: return "unplugged";
+            case 0x01: return "plugged";
+            default: return "unknown";
+        }
+    }
+};
+
+/**
+ * BAP Charge State (from BAP function 0x11)
+ * Updated passively by listening to BAP responses
+ */
+enum class BapChargeMode : uint8_t {
+    OFF = 0x0,
+    AC = 0x1,
+    DC = 0x2,
+    CONDITIONING = 0x3,
+    AC_AND_CONDITIONING = 0x4,
+    DC_AND_CONDITIONING = 0x5,
+    INIT = 0xF
+};
+
+enum class BapChargeStatus : uint8_t {
+    INIT = 0x0,
+    IDLE = 0x1,
+    RUNNING = 0x2,
+    CONSERVATION = 0x3,
+    ABORTED_TEMP_LOW = 0x4,
+    ABORTED_DEVICE_ERROR = 0x5,
+    ABORTED_NO_POWER = 0x6,
+    ABORTED_NOT_IN_PARK = 0x7,
+    COMPLETED = 0x8,
+    NO_ERROR = 0x9
+};
+
+struct BapChargeState {
+    BapChargeMode chargeMode = BapChargeMode::INIT;
+    BapChargeStatus chargeStatus = BapChargeStatus::INIT;
+    uint8_t socPercent = 0;           // 0-100%
+    uint8_t remainingTimeMin = 0;     // Minutes to full charge
+    uint8_t currentRange = 0;
+    uint8_t chargingAmps = 0;
+    uint8_t targetSoc = 0;
+    unsigned long lastUpdate = 0;
+    
+    bool isCharging() const { 
+        return chargeMode != BapChargeMode::OFF && 
+               chargeMode != BapChargeMode::INIT &&
+               chargeStatus == BapChargeStatus::RUNNING; 
+    }
+    bool isAcCharging() const { 
+        return chargeMode == BapChargeMode::AC || 
+               chargeMode == BapChargeMode::AC_AND_CONDITIONING; 
+    }
+    bool isDcCharging() const { 
+        return chargeMode == BapChargeMode::DC || 
+               chargeMode == BapChargeMode::DC_AND_CONDITIONING; 
+    }
+    bool isValid() const { return chargeMode != BapChargeMode::INIT; }
+    
+    const char* chargeModeStr() const {
+        switch (chargeMode) {
+            case BapChargeMode::OFF: return "off";
+            case BapChargeMode::AC: return "AC";
+            case BapChargeMode::DC: return "DC";
+            case BapChargeMode::CONDITIONING: return "conditioning";
+            case BapChargeMode::AC_AND_CONDITIONING: return "AC+cond";
+            case BapChargeMode::DC_AND_CONDITIONING: return "DC+cond";
+            default: return "init";
+        }
+    }
+    
+    const char* chargeStatusStr() const {
+        switch (chargeStatus) {
+            case BapChargeStatus::IDLE: return "idle";
+            case BapChargeStatus::RUNNING: return "running";
+            case BapChargeStatus::CONSERVATION: return "conservation";
+            case BapChargeStatus::COMPLETED: return "completed";
+            case BapChargeStatus::ABORTED_TEMP_LOW: return "aborted:cold";
+            case BapChargeStatus::ABORTED_DEVICE_ERROR: return "aborted:error";
+            case BapChargeStatus::ABORTED_NO_POWER: return "aborted:no_power";
+            case BapChargeStatus::ABORTED_NOT_IN_PARK: return "aborted:not_park";
+            case BapChargeStatus::NO_ERROR: return "no_error";
+            default: return "init";
+        }
+    }
+};
+
+/**
+ * BAP Climate State (from BAP function 0x12)
+ * Updated passively by listening to BAP responses
+ */
+struct BapClimateState {
+    bool climateActive = false;
+    bool autoDefrost = false;
+    bool heating = false;
+    bool cooling = false;
+    bool ventilation = false;
+    float currentTempC = 0.0f;
+    uint16_t climateTimeMin = 0;      // Remaining time
+    uint8_t climateState = 0;
+    unsigned long lastUpdate = 0;
+    
+    bool isActive() const { return climateActive; }
+    bool isValid() const { return lastUpdate > 0; }
+};
+
+/**
  * Combined vehicle state
  */
 struct VehicleState {
+    // Broadcast domain states
     BodyState body;
     DriveState drive;
     BatteryState battery;
     ClimateState climate;
     CanGpsState gps;
     RangeState range;
+    
+    // BAP domain states (from passive listening)
+    BapPlugState bapPlug;
+    BapChargeState bapCharge;
+    BapClimateState bapClimate;
     
     // Global update tracking
     unsigned long lastCanActivity = 0;

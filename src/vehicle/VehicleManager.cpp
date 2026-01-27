@@ -9,6 +9,7 @@ VehicleManager::VehicleManager(CanManager* canMgr)
     , climateDomain(state, this)
     , gpsDomain(state, this)
     , rangeDomain(state, this)
+    , bapDomain(state, this)
 {
 }
 
@@ -25,6 +26,7 @@ bool VehicleManager::setup() {
     Serial.println("[VehicleManager]   - ClimateDomain (0x66E, 0x5E1)");
     Serial.println("[VehicleManager]   - GpsDomain (0x484, 0x485, 0x486)");
     Serial.println("[VehicleManager]   - RangeDomain (0x5F5, 0x5F7)");
+    Serial.println("[VehicleManager]   - BapDomain (0x17332510 BAP RX)");
     
     return true;
 }
@@ -44,10 +46,14 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t* data, uint8_t dlc
     // Track all CAN IDs for debugging
     trackCanId(canId, dlc);
     
-    // Skip extended frames for now (used by BAP protocol)
+    // Extended frames go to BAP domain
     if (extended) {
-        // TODO: Route to BAP handler when implemented
-        return;
+        if (bapDomain.handlesCanId(canId)) {
+            if (bapDomain.processFrame(canId, data, dlc)) {
+                bapFrames++;
+            }
+        }
+        return;  // Don't route extended frames to other domains
     }
     
     // Route to domains based on CAN ID
@@ -152,8 +158,8 @@ bool VehicleManager::sendCanFrame(uint32_t canId, const uint8_t* data, uint8_t d
 
 void VehicleManager::logStatistics() {
     Serial.println("[VehicleManager] === Vehicle Status ===");
-    Serial.printf("[VehicleManager] CAN frames: %lu (body:%lu batt:%lu drv:%lu clim:%lu gps:%lu rng:%lu unhandled:%lu)\r\n", 
-        state.canFrameCount, bodyFrames, batteryFrames, driveFrames, climateFrames, gpsFrames, rangeFrames, unhandledFrames);
+    Serial.printf("[VehicleManager] CAN frames: %lu (body:%lu batt:%lu drv:%lu clim:%lu gps:%lu rng:%lu bap:%lu unhandled:%lu)\r\n", 
+        state.canFrameCount, bodyFrames, batteryFrames, driveFrames, climateFrames, gpsFrames, rangeFrames, bapFrames, unhandledFrames);
     
     // Show seen CAN IDs (most important for debugging!)
     Serial.printf("[VehicleManager] Unique CAN IDs seen: %u\r\n", numSeenIds);
@@ -166,6 +172,7 @@ void VehicleManager::logStatistics() {
         else if (climateDomain.handlesCanId(seenCanIds[i])) domain = " <-- CLIMATE";
         else if (gpsDomain.handlesCanId(seenCanIds[i])) domain = " <-- GPS";
         else if (rangeDomain.handlesCanId(seenCanIds[i])) domain = " <-- RANGE";
+        else if (bapDomain.handlesCanId(seenCanIds[i])) domain = " <-- BAP";
         
         Serial.printf("[VehicleManager]   0x%03lX (DLC=%u) -> %lu%s\r\n", 
             seenCanIds[i], seenIdDlcs[i], seenIdCounts[i], domain);
@@ -249,6 +256,27 @@ void VehicleManager::logStatistics() {
         Serial.printf("[VehicleManager] Consumption: %.1f %s, Reserve:%s\r\n",
             rng.consumption, rng.consumptionUnit == 0 ? "kWh/100km" : "km/kWh", 
             rng.reserveWarning ? "YES" : "no");
+    }
+    
+    // BAP status (from passive listening to BAP protocol)
+    const BapPlugState& plug = state.bapPlug;
+    const BapChargeState& charge = state.bapCharge;
+    const BapClimateState& bapClim = state.bapClimate;
+    if (plug.isValid() || charge.isValid() || bapClim.isValid()) {
+        Serial.printf("[VehicleManager] BAP Plug: %s (supply:%s lock:%d)\r\n",
+            plug.plugStateStr(),
+            plug.hasSupply() ? "yes" : "no",
+            plug.lockState);
+        Serial.printf("[VehicleManager] BAP Charge: SOC=%d%% mode=%s status=%s time=%dmin\r\n",
+            charge.socPercent,
+            charge.chargeModeStr(),
+            charge.chargeStatusStr(),
+            charge.remainingTimeMin);
+        if (bapClim.isValid()) {
+            Serial.printf("[VehicleManager] BAP Climate: %s (heat:%d cool:%d temp:%.1f°C)\r\n",
+                bapClim.climateActive ? "ACTIVE" : "off",
+                bapClim.heating, bapClim.cooling, bapClim.currentTempC);
+        }
     }
     
     Serial.println("[VehicleManager] ======================");

@@ -8,6 +8,7 @@
 #include "domains/ClimateDomain.h"
 #include "domains/GpsDomain.h"
 #include "domains/RangeDomain.h"
+#include "domains/BapDomain.h"
 
 // Forward declaration
 class CanManager;
@@ -27,6 +28,8 @@ class CanManager;
  * - DriveDomain: ignition, speed, odometer
  * - ClimateDomain: temperatures, climate control
  * - GpsDomain: CAN-based GPS data from infotainment
+ * - RangeDomain: range estimation from cluster
+ * - BapDomain: BAP protocol for charging/climate control
  */
 class VehicleManager {
 public:
@@ -114,6 +117,11 @@ public:
      */
     RangeDomain& range() { return rangeDomain; }
     
+    /**
+     * Get the BAP domain (charging/climate control via BAP protocol).
+     */
+    BapDomain& bap() { return bapDomain; }
+    
     // =========================================================================
     // Status
     // =========================================================================
@@ -146,6 +154,7 @@ private:
     ClimateDomain climateDomain;
     GpsDomain gpsDomain;
     RangeDomain rangeDomain;
+    BapDomain bapDomain;
     
     // Configuration
     bool verbose = false;
@@ -161,6 +170,7 @@ private:
     uint32_t climateFrames = 0;
     uint32_t gpsFrames = 0;
     uint32_t rangeFrames = 0;
+    uint32_t bapFrames = 0;
     uint32_t unhandledFrames = 0;
     
     // Track unique CAN IDs seen (for debugging)

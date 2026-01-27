@@ -41,9 +41,50 @@ This document outlines the plan to complete CAN bus functionality for the SmartK
 
 ## Phase 1: BAP Protocol Foundation
 
-**Goal:** Implement the BAP (Bedien- und Anzeigeprotokoll) protocol to enable two-way communication with Battery Control module (Device 0x25).
+**Goal:** Implement the BAP (Bedien- und Anzeigeprotokoll) protocol to monitor Battery Control state and send commands when needed.
 
 **Duration:** 2-3 sessions
+
+### BAP Architecture Overview
+
+BAP is a shared bus protocol where **multiple modules** communicate simultaneously:
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│     OCU      │     │  Infotainment│     │   Gateway    │
+│  (our unit)  │     │    (MIB)     │     │              │
+└──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+       │                    │                    │
+       ▼                    ▼                    ▼
+═══════════════════════════════════════════════════════════  CAN Bus
+       │                    │                    │
+       │              ┌─────┴─────┐              │
+       │              ▼           ▼              │
+       │     0x17332501      0x17332510          │
+       │     (Commands)      (Responses)         │
+       │              │           │              │
+       │              └─────┬─────┘              │
+       │                    ▼                    │
+       │           ┌──────────────┐              │
+       │           │   Battery    │              │
+       │           │   Control    │              │
+       │           │  (Dev 0x25)  │              │
+       │           └──────────────┘              │
+       │
+       └──► We LISTEN to 0x17332510 (responses) passively
+            We SEND to 0x17332501 (commands) only when needed
+```
+
+**Key insight:** Other modules (infotainment, gateway, phone app via gateway) also send commands to Battery Control. By **passively listening** to the response channel (0x17332510), we can track state changes regardless of who initiated them:
+
+- Infotainment starts pre-heating → We see the ClimateState response
+- Phone app starts charging → We see the ChargeState response  
+- Gateway polls for status → We see the current state
+
+**Our approach:**
+1. **Always listen** to RX channel (0x17332510) - decode all responses to track state
+2. **Send commands** on TX channel (0x17332501) only when we need to act
+3. **Ignore** commands from other modules (0x17332501) - we only care about results
 
 ### 1.1 BAP Protocol Layer
 
@@ -51,31 +92,32 @@ Create `src/vehicle/protocols/BapProtocol.h/.cpp`:
 
 ```
 BapProtocol
-├── Message encoding
+├── Message decoding (PRIMARY - for passive listening)
+│   ├── decodeHeader(frame) → device, function, opcode
+│   ├── isShortMessage() / isLongMessage()
+│   ├── getPayload(frame) → payload bytes
+│   └── reassembleLongMessage(frames[]) → payload
+│
+├── Message encoding (for sending commands)
 │   ├── encodeShortMessage(device, function, opcode, payload) → frame
 │   ├── encodeLongMessage(device, function, opcode, payload) → frames[]
 │   └── Header format: byte0 = opcode<<4 | device>>2, byte1 = device<<6 | function
 │
-├── Message decoding
-│   ├── decodeHeader(frame) → device, function, opcode
-│   ├── isShortMessage() / isLongMessage()
-│   └── reassembleLongMessage(frames[]) → payload
-│
 └── Constants
     ├── DEVICE_BATTERY_CONTROL = 0x25
-    ├── CAN_ID_TX = 0x17332501
-    └── CAN_ID_RX = 0x17332510
+    ├── CAN_ID_TX = 0x17332501  (commands TO battery control)
+    └── CAN_ID_RX = 0x17332510  (responses FROM battery control)
 ```
 
-**OpCodes:**
-- 0x00 = Reset
-- 0x01 = Get
-- 0x02 = SetGet
-- 0x03 = HeartBeat
-- 0x04 = Processing
-- 0x05 = Indication (unsolicited)
-- 0x06 = Void (unused)
-- 0x07 = Error
+**OpCodes (responses we care about):**
+- 0x03 = HeartBeat - Periodic status update
+- 0x04 = Processing - Command acknowledged, working
+- 0x05 = Indication - Unsolicited state change notification
+- 0x07 = Error - Command failed
+
+**OpCodes (for sending):**
+- 0x01 = Get - Request current state
+- 0x02 = SetGet - Change state and get result
 
 ### 1.2 BapDomain
 
@@ -83,13 +125,15 @@ Create `src/vehicle/domains/BapDomain.h/.cpp`:
 
 ```
 BapDomain
-├── Handles extended CAN IDs: 0x17332501, 0x17332510
-├── State tracking
+├── Handles extended CAN ID: 0x17332510 (RX only for passive monitoring)
+│   └── Optionally handle 0x17332501 for TX
+│
+├── Passive state tracking (updated from ANY response)
 │   ├── BapChargeState (soc, available_kwh, charging, ac/dc type)
 │   ├── BapPlugState (connected, lock_state)
 │   └── BapClimateState (active, target_temp, defrost)
 │
-├── Commands (via VehicleManager)
+├── Active commands (only when WE need to act)
 │   ├── requestChargeState() → sends Get to function 0x11
 │   ├── requestPlugState() → sends Get to function 0x10
 │   ├── requestClimateState() → sends Get to function 0x12
@@ -98,9 +142,14 @@ BapDomain
 │   ├── startCharging() → sends SetGet to function 0x14
 │   └── stopCharging() → sends SetGet to function 0x14
 │
+├── Long message reassembly
+│   └── Buffer for multi-frame messages (keyed by device+function)
+│
 └── Response handling
-    └── processFrame() → decode BAP response, update state
+    └── processFrame() → decode ANY BAP response, update state
 ```
+
+**Important:** `processFrame()` decodes ALL responses on 0x17332510, not just responses to our commands. This lets us track state changes initiated by other modules.
 
 ### 1.3 VehicleManager Updates
 
