@@ -28,6 +28,7 @@ functionality for remote car control and monitoring via an app.
 | | Horn honk | - | Yes | Medium |
 | | Lights flash | - | Yes | Medium |
 | **Trip Data** | Odometer | Yes | - | High |
+| | Estimated range | Yes | - | High |
 | | Trip distance | Yes | - | Medium |
 | | Trip time | Yes | - | Medium |
 | | Average speed | Yes | - | Medium |
@@ -166,14 +167,54 @@ functionality for remote car control and monitoring via an app.
 
 | Data Point | Source | CAN ID | Signal/Function | Notes |
 |------------|--------|--------|-----------------|-------|
-| Odometer km | Broadcast | 0x6B2 | KBI_Kilometerstand | 20-bit, bits 8-27 |
+| Odometer km | Broadcast | 0x6B2 | KBI_Kilometerstand | 20-bit, bits 8-27 ✓ |
+| **Estimated range** | Broadcast | 0x5F5 | RW_Gesamt_Reichweite | 11 bits, 1 km scale ✓ |
+| **Electric range** | Broadcast | 0x5F5 | RW_Primaer_Reichweite | 11 bits, 1 km scale ✓ |
+| **Range for display** | Broadcast | 0x5F7 | RW_Gesamt_Reichweite_Anzeige | 11 bits, 1 km scale ✓ |
+| Consumption | Broadcast | 0x5F5 | RW_Prim_Reichweitenverbrauch | 11 bits, 0.1 scale ✓ |
+| Range tendency | Broadcast | 0x5F7 | RW_Tendenz | 0=stable, 1=up, 2=down ✓ |
+| Reserve warning | Broadcast | 0x5F7 | RW_Reservewarnung_aktiv | 1=active ✓ |
 | Trip distance | Broadcast | TBD | - | May be in Kombi messages |
 | Trip time | Broadcast | TBD | - | May be in Kombi messages |
 | Average speed | Calculated | - | distance / time | |
-| Average consumption | BAP? | TBD | - | May be in ENI or Kombi |
 | Current speed | Broadcast | 0x0FD | ESP_v_Signal | 0.01 km/h scale |
 
 **Note:** Trip data may reset on ignition cycle. Need to investigate persistence.
+
+### Range Messages (0x5F5, 0x5F7)
+
+These messages provide the car's calculated range estimate directly from the BMS/gateway.
+
+#### 0x5F5 Reichweite_01 (Range Data)
+
+| Signal | Bits | Scale | Unit | Description |
+|--------|------|-------|------|-------------|
+| RW_Gesamt_Reichweite_Max_Anzeige | 0-10 | 1 | km | Maximum display range |
+| RW_Reservewarnung_2_aktiv | 16-17 | 1 | - | Reserve warning level 2 |
+| RW_RWDS_Lastprofil | 18-28 | 1 | A | Load profile for charging calc |
+| RW_Gesamt_Reichweite | 29-39 | 1 | km | **Total estimated range** |
+| RW_Prim_Reichweitenverbrauch | 40-50 | 0.1 | - | Primary consumption value |
+| RW_Prim_Reichweitenv_Einheit | 51-52 | 1 | - | Unit: 0=kWh/100km, 1=km/kWh |
+| RW_Primaer_Reichweite | 53-63 | 1 | km | **Primary (electric) range** |
+
+#### 0x5F7 Reichweite_02 (Range Display)
+
+| Signal | Bits | Scale | Unit | Description |
+|--------|------|-------|------|-------------|
+| RW_Tendenz | 0-2 | 1 | - | Trend: 0=stable, 1=increasing, 2=decreasing |
+| RW_Texte | 3-4 | 1 | - | Text message index |
+| RW_Reservewarnung_aktiv | 5 | 1 | - | Reserve warning active |
+| RW_Reichweite_Einheit_Anzeige | 6 | 1 | - | Display unit: 0=km, 1=miles |
+| RW_Gesamt_Reichweite_Anzeige | 7-17 | 1 | km | **Total range for display** |
+| RW_Primaer_Reichweite_Anzeige | 18-28 | 1 | km | Electric range for display |
+| RW_Sekundaer_Reichweite_Anzeige | 29-39 | 1 | km | Secondary range (N/A for BEV) |
+| RW_Sekundaer_Reichweite | 40-50 | 1 | km | Secondary range (N/A for BEV) |
+| RW_Sek_Reichweitenv_Einheit | 51-52 | 1 | - | Secondary unit |
+| RW_Sek_Reichweitenverbrauch | 53-63 | 0.1 | - | Secondary consumption |
+
+**Invalid/Init values:** 2045-2047 (0x7FD-0x7FF) indicate no data available.
+
+**Note:** For a pure BEV like e-Golf, "Secondary" values are unused (set to invalid). Primary = electric range.
 
 ---
 
@@ -340,6 +381,8 @@ For each data point, prefer sources in this order:
 | Odometer/time | 0x6B2 | **Confirmed in traces** | Diagnose_01 |
 | Ignition state | 0x3C0 | **Confirmed in traces** | Klemmen_Status_01 |
 | Outside temp | 0x5E1 | **Confirmed in traces** | Klima_Sensor_02 |
+| Range data | 0x5F5 | **Confirmed in traces** | Reichweite_01 |
+| Range display | 0x5F7 | **Confirmed in traces** | Reichweite_02 |
 | GPS position | 0x486 | **Confirmed in traces** | NavPos_01 |
 | GPS altitude/UTC | 0x485 | **Confirmed in traces** | NavData_02 |
 | GPS heading/DOP | 0x484 | **Confirmed in traces** | NavData_01 |

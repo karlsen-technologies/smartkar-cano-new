@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [2026-01-27] - Range Estimate Signals (Reichweite)
+
+### Added
+- **Range estimate signals (0x5F5, 0x5F7)** - Confirmed on comfort CAN bus
+  - 0x5F5 Reichweite_01: Total range, electric range, consumption
+  - 0x5F7 Reichweite_02: Display values, range tendency, reserve warning
+  - Provides car's calculated range estimate directly (no calculation needed)
+
+### Updated
+- `OCU_FEATURES.md` - Added complete signal definitions for range messages
+- Feature overview now includes "Estimated range" as high priority
+
+### Verified from Trace
+- Electric range: 130-131 km
+- Max display range: 247 km
+- Consumption value: 11.5
+- Range tendency: stable
+- Invalid/init values: 2045-2047 (0x7FD-0x7FF)
+
+---
+
 ## [2026-01-27] - CAN Bus Availability Verification
 
 ### Fixed
@@ -125,6 +146,8 @@ For full BMS/charging data, use **BAP protocol** (0x17332501/0x17332510) which p
 | 0x5A7 | TM_01 | Horn/flash/lock cmd | ✓ Verified |
 | 0x5CA | BMS_07 | Energy/charging | ✓ Verified |
 | 0x5E1 | Klima_Sensor_02 | Outside temp | ✓ Verified |
+| 0x5F5 | Reichweite_01 | Range data | ✓ Verified |
+| 0x5F7 | Reichweite_02 | Range display | ✓ Verified |
 | 0x668 | Klima_01 | Blower/seat heat | ✓ Verified |
 | 0x66E | Klima_02 | Climate status | ✓ Verified |
 | 0x6B2 | Diagnose_01 | Odometer/time | ✓ Verified |
