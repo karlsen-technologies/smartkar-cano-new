@@ -3,6 +3,9 @@
 #include <Arduino.h>
 #include "VehicleState.h"
 #include "domains/BodyDomain.h"
+#include "domains/BatteryDomain.h"
+#include "domains/DriveDomain.h"
+#include "domains/ClimateDomain.h"
 
 // Forward declaration
 class CanManager;
@@ -84,6 +87,21 @@ public:
      */
     BodyDomain& body() { return bodyDomain; }
     
+    /**
+     * Get the battery domain (SOC, voltage, current, charging).
+     */
+    BatteryDomain& battery() { return batteryDomain; }
+    
+    /**
+     * Get the drive domain (ignition, speed, odometer).
+     */
+    DriveDomain& drive() { return driveDomain; }
+    
+    /**
+     * Get the climate domain (temperatures).
+     */
+    ClimateDomain& climate() { return climateDomain; }
+    
     // =========================================================================
     // Status
     // =========================================================================
@@ -111,6 +129,9 @@ private:
     
     // Domains
     BodyDomain bodyDomain;
+    BatteryDomain batteryDomain;
+    DriveDomain driveDomain;
+    ClimateDomain climateDomain;
     
     // Configuration
     bool verbose = false;

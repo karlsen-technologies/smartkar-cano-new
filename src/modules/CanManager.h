@@ -126,7 +126,7 @@ private:
     
     // Configuration
     CanSpeed canSpeed = CanSpeed::CAN_500KBPS;  // Default to OBD-II speed
-    bool verbose = true;  // Log all received messages
+    bool verbose = false;  // Log all received messages (disabled by default)
 
     // Statistics
     uint32_t messageCount = 0;

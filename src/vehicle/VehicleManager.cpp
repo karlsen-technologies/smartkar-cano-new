@@ -4,6 +4,9 @@
 VehicleManager::VehicleManager(CanManager* canMgr)
     : canManager(canMgr)
     , bodyDomain(state, this)
+    , batteryDomain(state, this)
+    , driveDomain(state, this)
+    , climateDomain(state, this)
 {
 }
 
@@ -15,6 +18,9 @@ bool VehicleManager::setup() {
     
     Serial.println("[VehicleManager] Domains initialized:");
     Serial.println("[VehicleManager]   - BodyDomain (0x3D0, 0x3D1, 0x583)");
+    Serial.println("[VehicleManager]   - BatteryDomain (0x191, 0x509, 0x5CA, 0x59E, 0x2AE)");
+    Serial.println("[VehicleManager]   - DriveDomain (0x3C0, 0x0FD, 0x6B2)");
+    Serial.println("[VehicleManager]   - ClimateDomain (0x66E)");
     
     return true;
 }
@@ -45,9 +51,20 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t* data, uint8_t dlc
         processed = bodyDomain.processFrame(canId, data, dlc);
     }
     
-    // TODO: Add more domains here
-    // if (batteryDomain.handlesCanId(canId)) { ... }
-    // if (driveDomain.handlesCanId(canId)) { ... }
+    // Battery domain (SOC, voltage, current, charging)
+    if (!processed && batteryDomain.handlesCanId(canId)) {
+        processed = batteryDomain.processFrame(canId, data, dlc);
+    }
+    
+    // Drive domain (ignition, speed, odometer)
+    if (!processed && driveDomain.handlesCanId(canId)) {
+        processed = driveDomain.processFrame(canId, data, dlc);
+    }
+    
+    // Climate domain (temperatures)
+    if (!processed && climateDomain.handlesCanId(canId)) {
+        processed = climateDomain.processFrame(canId, data, dlc);
+    }
     
     // Verbose logging of unprocessed frames
     if (verbose && !processed) {
@@ -118,6 +135,45 @@ void VehicleManager::logStatistics() {
         Serial.printf("[VehicleManager] Passenger door: %s, window: %.0f%%\r\n",
             body.passengerDoor.open ? "OPEN" : "closed",
             body.passengerDoor.windowPercent());
+    }
+    
+    // Battery status
+    const BatteryState& batt = state.battery;
+    if (batt.bms01Update > 0) {
+        Serial.printf("[VehicleManager] Battery: %.1f%% %.1fV %.1fA (%.1fkW)\r\n",
+            batt.socHiRes, batt.voltage, batt.current, batt.power() / 1000.0f);
+    }
+    if (batt.bms07Update > 0 && batt.chargingActive) {
+        Serial.println("[VehicleManager] Charging: ACTIVE");
+    }
+    if (batt.tempUpdate > 0) {
+        Serial.printf("[VehicleManager] Battery temp: %.1f°C\r\n", batt.temperature);
+    }
+    
+    // Drive status
+    const DriveState& drv = state.drive;
+    if (drv.ignitionUpdate > 0) {
+        const char* ignStr;
+        switch (drv.ignition) {
+            case IgnitionState::OFF: ignStr = "OFF"; break;
+            case IgnitionState::ACCESSORY: ignStr = "ACCESSORY"; break;
+            case IgnitionState::ON: ignStr = "ON"; break;
+            case IgnitionState::START: ignStr = "START"; break;
+            default: ignStr = "UNKNOWN"; break;
+        }
+        Serial.printf("[VehicleManager] Ignition: %s, Speed: %.1f km/h\r\n", ignStr, drv.speedKmh);
+    }
+    if (drv.odometerUpdate > 0) {
+        Serial.printf("[VehicleManager] Odometer: %lu km\r\n", drv.odometerKm);
+    }
+    
+    // Climate status
+    const ClimateState& clim = state.climate;
+    if (clim.klimaUpdate > 0) {
+        Serial.printf("[VehicleManager] Inside temp: %.1f°C\r\n", clim.insideTemp);
+        if (clim.standbyHeatingActive) {
+            Serial.println("[VehicleManager] Standby heating: ON");
+        }
     }
     
     Serial.println("[VehicleManager] ======================");
