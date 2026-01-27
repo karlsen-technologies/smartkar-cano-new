@@ -8,6 +8,7 @@ VehicleManager::VehicleManager(CanManager* canMgr)
     , driveDomain(state, this)
     , climateDomain(state, this)
     , gpsDomain(state, this)
+    , rangeDomain(state, this)
 {
 }
 
@@ -23,6 +24,7 @@ bool VehicleManager::setup() {
     Serial.println("[VehicleManager]   - DriveDomain (0x3C0, 0x0FD, 0x6B2)");
     Serial.println("[VehicleManager]   - ClimateDomain (0x66E, 0x5E1)");
     Serial.println("[VehicleManager]   - GpsDomain (0x484, 0x485, 0x486)");
+    Serial.println("[VehicleManager]   - RangeDomain (0x5F5, 0x5F7)");
     
     return true;
 }
@@ -79,6 +81,12 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t* data, uint8_t dlc
     if (!processed && gpsDomain.handlesCanId(canId)) {
         processed = gpsDomain.processFrame(canId, data, dlc);
         if (processed) gpsFrames++;
+    }
+    
+    // Range domain (range estimation from cluster)
+    if (!processed && rangeDomain.handlesCanId(canId)) {
+        processed = rangeDomain.processFrame(canId, data, dlc);
+        if (processed) rangeFrames++;
     }
     
     if (!processed) {
@@ -144,8 +152,8 @@ bool VehicleManager::sendCanFrame(uint32_t canId, const uint8_t* data, uint8_t d
 
 void VehicleManager::logStatistics() {
     Serial.println("[VehicleManager] === Vehicle Status ===");
-    Serial.printf("[VehicleManager] CAN frames: %lu (body:%lu batt:%lu drv:%lu clim:%lu gps:%lu unhandled:%lu)\r\n", 
-        state.canFrameCount, bodyFrames, batteryFrames, driveFrames, climateFrames, gpsFrames, unhandledFrames);
+    Serial.printf("[VehicleManager] CAN frames: %lu (body:%lu batt:%lu drv:%lu clim:%lu gps:%lu rng:%lu unhandled:%lu)\r\n", 
+        state.canFrameCount, bodyFrames, batteryFrames, driveFrames, climateFrames, gpsFrames, rangeFrames, unhandledFrames);
     
     // Show seen CAN IDs (most important for debugging!)
     Serial.printf("[VehicleManager] Unique CAN IDs seen: %u\r\n", numSeenIds);
@@ -157,6 +165,7 @@ void VehicleManager::logStatistics() {
         else if (driveDomain.handlesCanId(seenCanIds[i])) domain = " <-- DRIVE";
         else if (climateDomain.handlesCanId(seenCanIds[i])) domain = " <-- CLIMATE";
         else if (gpsDomain.handlesCanId(seenCanIds[i])) domain = " <-- GPS";
+        else if (rangeDomain.handlesCanId(seenCanIds[i])) domain = " <-- RANGE";
         
         Serial.printf("[VehicleManager]   0x%03lX (DLC=%u) -> %lu%s\r\n", 
             seenCanIds[i], seenIdDlcs[i], seenIdCounts[i], domain);
@@ -230,6 +239,16 @@ void VehicleManager::logStatistics() {
     if (gps.hasFix()) {
         Serial.printf("[VehicleManager] Position: %.6f, %.6f alt:%.0fm heading:%.1f°\r\n",
             gps.latitude, gps.longitude, gps.altitude, gps.heading);
+    }
+    
+    // Range status
+    const RangeState& rng = state.range;
+    if (rng.isValid()) {
+        Serial.printf("[VehicleManager] Range: %d km (electric: %d km) %s\r\n",
+            rng.totalRangeKm, rng.electricRangeKm, rng.tendencyStr());
+        Serial.printf("[VehicleManager] Consumption: %.1f %s, Reserve:%s\r\n",
+            rng.consumption, rng.consumptionUnit == 0 ? "kWh/100km" : "km/kWh", 
+            rng.reserveWarning ? "YES" : "no");
     }
     
     Serial.println("[VehicleManager] ======================");

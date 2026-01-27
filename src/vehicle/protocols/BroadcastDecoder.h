@@ -555,4 +555,84 @@ inline NavData01Data decodeNavData01(const uint8_t* data) {
     return result;
 }
 
+// ============================================================================
+// Range estimation signals (Reichweite)
+// ============================================================================
+
+/**
+ * Reichweite_01 (0x5F5) - Range data from instrument cluster
+ */
+struct Reichweite01Data {
+    uint16_t maxDisplayRange;   // RW_Gesamt_Reichweite_Max_Anzeige (km)
+    uint16_t totalRange;        // RW_Gesamt_Reichweite (km)
+    uint16_t electricRange;     // RW_Primaer_Reichweite (km)
+    float consumption;          // RW_Prim_Reichweitenverbrauch
+    uint8_t consumptionUnit;    // 0=kWh/100km, 1=km/kWh
+    uint8_t reserveWarning2;    // RW_Reservewarnung_2_aktiv
+};
+
+inline Reichweite01Data decodeReichweite01(const uint8_t* data) {
+    Reichweite01Data result;
+    
+    // RW_Gesamt_Reichweite_Max_Anzeige: bits 0-10 (11 bits), scale 1 km
+    result.maxDisplayRange = extractSignalLE(data, 0, 11);
+    
+    // RW_Reservewarnung_2_aktiv: bits 16-17 (2 bits)
+    result.reserveWarning2 = extractSignalLE(data, 16, 2);
+    
+    // RW_Gesamt_Reichweite: bits 29-39 (11 bits), scale 1 km
+    result.totalRange = extractSignalLE(data, 29, 11);
+    
+    // RW_Prim_Reichweitenverbrauch: bits 40-50 (11 bits), scale 0.1
+    result.consumption = extractSignalLE(data, 40, 11) * 0.1f;
+    
+    // RW_Prim_Reichweitenv_Einheit: bits 51-52 (2 bits)
+    result.consumptionUnit = extractSignalLE(data, 51, 2);
+    
+    // RW_Primaer_Reichweite: bits 53-63 (11 bits), scale 1 km
+    result.electricRange = extractSignalLE(data, 53, 11);
+    
+    return result;
+}
+
+/**
+ * Reichweite_02 (0x5F7) - Range display data
+ */
+struct Reichweite02Data {
+    uint8_t tendency;           // RW_Tendenz: 0=stable, 1=increasing, 2=decreasing
+    uint8_t textIndex;          // RW_Texte
+    bool reserveWarning;        // RW_Reservewarnung_aktiv
+    bool displayInMiles;        // RW_Reichweite_Einheit_Anzeige: 0=km, 1=miles
+    uint16_t displayTotalRange; // RW_Gesamt_Reichweite_Anzeige (km)
+    uint16_t displayElectricRange; // RW_Primaer_Reichweite_Anzeige (km)
+    uint16_t displaySecondaryRange; // RW_Sekundaer_Reichweite_Anzeige (N/A for BEV)
+};
+
+inline Reichweite02Data decodeReichweite02(const uint8_t* data) {
+    Reichweite02Data result;
+    
+    // RW_Tendenz: bits 0-2 (3 bits)
+    result.tendency = extractSignalLE(data, 0, 3);
+    
+    // RW_Texte: bits 3-4 (2 bits)
+    result.textIndex = extractSignalLE(data, 3, 2);
+    
+    // RW_Reservewarnung_aktiv: bit 5
+    result.reserveWarning = extractBit(data, 5);
+    
+    // RW_Reichweite_Einheit_Anzeige: bit 6
+    result.displayInMiles = extractBit(data, 6);
+    
+    // RW_Gesamt_Reichweite_Anzeige: bits 7-17 (11 bits), scale 1 km
+    result.displayTotalRange = extractSignalLE(data, 7, 11);
+    
+    // RW_Primaer_Reichweite_Anzeige: bits 18-28 (11 bits), scale 1 km
+    result.displayElectricRange = extractSignalLE(data, 18, 11);
+    
+    // RW_Sekundaer_Reichweite_Anzeige: bits 29-39 (11 bits), scale 1 km
+    result.displaySecondaryRange = extractSignalLE(data, 29, 11);
+    
+    return result;
+}
+
 } // namespace BroadcastDecoder

@@ -220,6 +220,50 @@ struct CanGpsState {
 };
 
 /**
+ * Range estimation state (from instrument cluster)
+ */
+enum class RangeTendency : uint8_t {
+    STABLE = 0,
+    INCREASING = 1,
+    DECREASING = 2,
+    UNKNOWN = 3
+};
+
+struct RangeState {
+    // From 0x5F5 (Reichweite_01) - Range data
+    uint16_t totalRangeKm = 0;          // RW_Gesamt_Reichweite (0-2044 km, 2045-2047=invalid)
+    uint16_t electricRangeKm = 0;       // RW_Primaer_Reichweite
+    uint16_t maxDisplayRangeKm = 0;     // RW_Gesamt_Reichweite_Max_Anzeige
+    float consumption = 0.0f;           // RW_Prim_Reichweitenverbrauch (kWh/100km or km/kWh)
+    uint8_t consumptionUnit = 0;        // 0=kWh/100km, 1=km/kWh
+    unsigned long reichweite01Update = 0;
+    
+    // From 0x5F7 (Reichweite_02) - Range display
+    uint16_t displayRangeKm = 0;        // RW_Gesamt_Reichweite_Anzeige
+    uint16_t displayElectricRangeKm = 0; // RW_Primaer_Reichweite_Anzeige
+    RangeTendency tendency = RangeTendency::UNKNOWN;  // Range trend
+    bool reserveWarning = false;        // Low range warning active
+    bool displayInMiles = false;        // Display unit: false=km, true=miles
+    unsigned long reichweite02Update = 0;
+    
+    // Invalid value marker (2045-2047 = 0x7FD-0x7FF)
+    static constexpr uint16_t INVALID_RANGE = 2045;
+    
+    bool isValid() const {
+        return totalRangeKm < INVALID_RANGE && electricRangeKm < INVALID_RANGE;
+    }
+    
+    const char* tendencyStr() const {
+        switch (tendency) {
+            case RangeTendency::STABLE: return "stable";
+            case RangeTendency::INCREASING: return "increasing";
+            case RangeTendency::DECREASING: return "decreasing";
+            default: return "unknown";
+        }
+    }
+};
+
+/**
  * Combined vehicle state
  */
 struct VehicleState {
@@ -228,6 +272,7 @@ struct VehicleState {
     BatteryState battery;
     ClimateState climate;
     CanGpsState gps;
+    RangeState range;
     
     // Global update tracking
     unsigned long lastCanActivity = 0;

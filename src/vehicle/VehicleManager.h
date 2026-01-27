@@ -7,6 +7,7 @@
 #include "domains/DriveDomain.h"
 #include "domains/ClimateDomain.h"
 #include "domains/GpsDomain.h"
+#include "domains/RangeDomain.h"
 
 // Forward declaration
 class CanManager;
@@ -108,6 +109,11 @@ public:
      */
     GpsDomain& gps() { return gpsDomain; }
     
+    /**
+     * Get the range domain (range estimation from cluster).
+     */
+    RangeDomain& range() { return rangeDomain; }
+    
     // =========================================================================
     // Status
     // =========================================================================
@@ -139,6 +145,7 @@ private:
     DriveDomain driveDomain;
     ClimateDomain climateDomain;
     GpsDomain gpsDomain;
+    RangeDomain rangeDomain;
     
     // Configuration
     bool verbose = false;
@@ -153,6 +160,7 @@ private:
     uint32_t driveFrames = 0;
     uint32_t climateFrames = 0;
     uint32_t gpsFrames = 0;
+    uint32_t rangeFrames = 0;
     uint32_t unhandledFrames = 0;
     
     // Track unique CAN IDs seen (for debugging)
