@@ -170,6 +170,11 @@ void PowerManager::enableDeepSleepWakeup() {
     // Configure ESP32 to wake up on:
     // - GPIO3: Modem RI (Ring Indicator) - incoming data/call
     // - GPIO6: PMU IRQ - low battery warning, USB connect, etc.
+    // - GPIO21: CAN RX - CAN bus activity (vehicle wake)
+    
+    // Debug: print current pin states before configuring
+    Serial.printf("[POWER] Pin states before sleep - GPIO3: %d, GPIO6: %d, GPIO21: %d\r\n",
+        digitalRead(GPIO_NUM_3), digitalRead(PMU_INPUT_PIN), digitalRead(GPIO_NUM_21));
     
     // Setup modem RI pin (GPIO3)
     rtc_gpio_init(GPIO_NUM_3);
@@ -183,17 +188,26 @@ void PowerManager::enableDeepSleepWakeup() {
     rtc_gpio_pulldown_dis((gpio_num_t)PMU_INPUT_PIN);
     rtc_gpio_pullup_en((gpio_num_t)PMU_INPUT_PIN);  // PMU IRQ is active low, needs pullup
     
-    // Wake on LOW level on either pin (both are active low)
+    // Setup CAN RX pin (GPIO21) - CAN idles high (recessive), goes low on activity
+    rtc_gpio_init(GPIO_NUM_21);
+    rtc_gpio_set_direction(GPIO_NUM_21, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pulldown_dis(GPIO_NUM_21);
+    rtc_gpio_pullup_dis(GPIO_NUM_21);  // Transceiver handles the level
+    
+    // Wake on LOW level on any pin (all are active low)
+    // TEMP: Testing without GPIO21 to verify modem wake works
     uint64_t wakeMask = (1ULL << GPIO_NUM_3) | (1ULL << PMU_INPUT_PIN);
+    // uint64_t wakeMask = (1ULL << GPIO_NUM_3) | (1ULL << PMU_INPUT_PIN) | (1ULL << GPIO_NUM_21);
     esp_sleep_enable_ext1_wakeup(wakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
     
-    Serial.printf("[POWER] Deep sleep wakeup enabled on GPIO3 (RI) and GPIO%d (PMU)\r\n", PMU_INPUT_PIN);
+    Serial.printf("[POWER] Deep sleep wakeup enabled on GPIO3 (RI), GPIO%d (PMU)\r\n", PMU_INPUT_PIN);
 }
 
 void PowerManager::disableDeepSleepWakeup() {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     rtc_gpio_deinit(GPIO_NUM_3);
     rtc_gpio_deinit((gpio_num_t)PMU_INPUT_PIN);
+    rtc_gpio_deinit(GPIO_NUM_21);
 }
 
 uint16_t PowerManager::getBatteryVoltage() {

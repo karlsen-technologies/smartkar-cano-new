@@ -7,6 +7,7 @@
 class PowerManager;
 class ModemManager;
 class LinkManager;
+class CanManager;
 class CommandRouter;
 class DeviceProvider;
 class NetworkProvider;
@@ -98,6 +99,7 @@ public:
     PowerManager* getPowerManager() { return powerManager; }
     ModemManager* getModemManager() { return modemManager; }
     LinkManager* getLinkManager() { return linkManager; }
+    CanManager* getCanManager() { return canManager; }
     CommandRouter* getCommandRouter() { return commandRouter; }
 
 private:
@@ -111,6 +113,7 @@ private:
     PowerManager* powerManager = nullptr;
     ModemManager* modemManager = nullptr;
     LinkManager* linkManager = nullptr;
+    CanManager* canManager = nullptr;
     
     // Telemetry providers
     DeviceProvider* deviceProvider = nullptr;

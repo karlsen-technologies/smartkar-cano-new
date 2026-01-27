@@ -3,6 +3,7 @@
 #include "../modules/PowerManager.h"
 #include "../modules/ModemManager.h"
 #include "../modules/LinkManager.h"
+#include "../modules/CanManager.h"
 #include "../providers/DeviceProvider.h"
 #include "../providers/NetworkProvider.h"
 #include "../handlers/SystemHandler.h"
@@ -60,12 +61,14 @@ void DeviceController::initModules() {
     powerManager = new PowerManager();
     modemManager = new ModemManager(powerManager);
     linkManager = new LinkManager(modemManager, commandRouter);
+    canManager = new CanManager();
 
     // Set activity callbacks on all modules
     ActivityCallback activityCb = getActivityCallback();
     powerManager->setActivityCallback(activityCb);
     modemManager->setActivityCallback(activityCb);
     linkManager->setActivityCallback(activityCb);
+    canManager->setActivityCallback(activityCb);
     
     // Set low battery callback
     powerManager->setLowBatteryCallback(&DeviceController::lowBatteryCallbackWrapper);
@@ -93,6 +96,15 @@ void DeviceController::initModules() {
             modemManager->enable();
         }
     }
+    
+    // Setup CAN manager (independent of power mode)
+    if (!canManager->setup()) {
+        Serial.println("[DEVICE] CanManager setup failed!");
+    }
+    
+    // Start CAN bus for debugging (can be disabled later)
+    Serial.println("[DEVICE] Starting CAN bus...");
+    canManager->start();
 
     Serial.println("[DEVICE] All modules initialized");
 }
@@ -143,6 +155,7 @@ void DeviceController::loopModules() {
     powerManager->loop();
     modemManager->loop();
     linkManager->loop();
+    canManager->loop();
 }
 
 void DeviceController::reportActivity() {
@@ -195,6 +208,11 @@ bool DeviceController::canSleep() {
         return false;
     }
 
+    if (canManager->isBusy()) {
+        Serial.println("[DEVICE] Cannot sleep: CanManager is busy");
+        return false;
+    }
+
     return true;
 }
 
@@ -202,6 +220,7 @@ void DeviceController::prepareForSleep() {
     Serial.println("[DEVICE] Notifying modules of impending sleep...");
 
     // Prepare in reverse dependency order
+    canManager->prepareForSleep();
     linkManager->prepareForSleep();
     modemManager->prepareForSleep();
     powerManager->prepareForSleep();
@@ -249,6 +268,9 @@ void DeviceController::logWakeupCause() {
                 wakeCauseString = "pmu_irq";
                 // Check and log what PMU event occurred
                 powerManager->checkPmuWakeupCause();
+            } else if (wakePin == 21) {  // CAN RX pin
+                Serial.println("[DEVICE] Wakeup cause: EXT1 (CAN bus activity)");
+                wakeCauseString = "can_activity";
             } else {
                 Serial.printf("[DEVICE] Wakeup cause: EXT1 (GPIO%d)\r\n", wakePin);
                 wakeCauseString = "ext1";
