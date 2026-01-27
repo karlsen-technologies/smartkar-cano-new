@@ -51,8 +51,8 @@ void LinkManager::loop() {
         }
     }
 
-    // Process any pending incoming data
-    processIncomingData();
+    // NOTE: Data processing happens via interrupt (handleTCPInterrupt)
+    // We do NOT poll client->available() here to avoid AT command spam
 
     // State machine
     switch (state) {
@@ -60,20 +60,20 @@ void LinkManager::loop() {
             // Attempt to connect with backoff
             if (millis_since(lastConnectAttempt) > CONNECT_RETRY_DELAY) {
                 if (connect()) {
-                    setState(LinkState::CONNECTING);
+                    // connect() returned true = connection established
+                    Serial.println("[LINK] TCP connected, authenticating");
+                    setState(LinkState::AUTHENTICATING);
+                    sendAuth();
                 }
                 lastConnectAttempt = millis();
             }
             break;
 
         case LinkState::CONNECTING:
-            // Check if connection established
-            if (client->connected()) {
-                Serial.println("[LINK] TCP connected, authenticating");
-                setState(LinkState::AUTHENTICATING);
-                sendAuth();
-            } else if (timeInState() > 10000) {
-                // Connection timeout
+            // This state is no longer used for normal flow
+            // connect() is synchronous - success goes directly to AUTHENTICATING
+            // This handles edge cases where we might end up here
+            if (timeInState() > 10000) {
                 Serial.println("[LINK] Connection timeout");
                 setState(LinkState::LINK_ERROR);
             }
@@ -89,13 +89,16 @@ void LinkManager::loop() {
             break;
 
         case LinkState::CONNECTED:
-            // Normal operation - data processing happens above
-            // Check for telemetry to send
+            // Normal operation - data processing happens via interrupt
             checkTelemetry();
             
-            if (!client->connected()) {
-                Serial.println("[LINK] Connection lost");
-                setState(LinkState::DISCONNECTED);
+            // Periodic connection health check (fallback for missed interrupts)
+            if (millis_since(lastConnectionCheck) > 60000) {
+                if (!client->connected()) {
+                    Serial.println("[LINK] Connection lost (periodic check)");
+                    setState(LinkState::DISCONNECTED);
+                }
+                lastConnectionCheck = millis();
             }
             break;
 
@@ -201,34 +204,23 @@ bool LinkManager::sendTelemetryNow(bool changedOnly) {
 }
 
 void LinkManager::handleTCPInterrupt() {
-    Serial.println("[LINK] TCP interrupt");
+    if (!client) return;
     
-    if (!modemManager || !modemManager->getModem()) return;
+    // TinyGSM's handleURCs() already processed the URC and set:
+    // - got_data = true (for +CADATAIND or +CARECV)
+    // - sock_connected = false (for +CASTATE with state != 1)
     
-    TinyGsm* modem = modemManager->getModem();
-    
-    int urc = modem->waitResponse(15L, "STATE:", "DATAIND:");
-
-    if (urc == 1) {
-        // Connection state change
-        int connState = modem->waitResponse(15L, "0,1", "0,0");
-        
-        if (connState == 1) {
-            Serial.println("[LINK] TCP connected via interrupt");
-            if (state == LinkState::CONNECTING) {
-                setState(LinkState::AUTHENTICATING);
-                sendAuth();
-            }
-        } else {
-            Serial.println("[LINK] TCP disconnected via interrupt");
-            setState(LinkState::DISCONNECTED);
-        }
-    } else if (urc == 2) {
-        // Data available
-        modem->waitResponse(15L, "\r\n");
-        Serial.println("[LINK] Data available");
-        processIncomingData();
+    // Check if connection was lost
+    if (!client->connected()) {
+        Serial.println("[LINK] TCP disconnected via interrupt");
+        setState(LinkState::DISCONNECTED);
+        if (activityCallback) activityCallback();
+        return;
     }
+    
+    // Process any incoming data
+    // client->available() will now work because got_data was set by handleURCs()
+    processIncomingData();
     
     if (activityCallback) activityCallback();
 }
@@ -312,11 +304,6 @@ bool LinkManager::sendAuth() {
 
 void LinkManager::processIncomingData() {
     if (!client) return;
-    
-    // Maintain the modem connection
-    if (modemManager && modemManager->getModem()) {
-        modemManager->getModem()->maintain();
-    }
     
     while (client->available()) {
         String line = client->readStringUntil('\n');

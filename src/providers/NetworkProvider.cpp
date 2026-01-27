@@ -73,7 +73,7 @@ bool NetworkProvider::hasChanged() {
             return true;
         }
         
-        // Check for significant signal change
+        // Check for significant signal change (ModemManager caches this value)
         int16_t currentSignal = modemManager->getSignalQuality();
         if (abs(currentSignal - lastSignalStrength) >= SIGNAL_CHANGE_THRESHOLD) {
             return true;

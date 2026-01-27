@@ -153,6 +153,7 @@ private:
 
     // Cached data
     String simCCID;
+    int16_t cachedSignalQuality = 0;
 
     // State machine helpers
     bool stateJustChanged();

@@ -113,6 +113,7 @@ private:
     unsigned long stateEntryTime = 0;
     unsigned long lastLoopTime = 0;
     unsigned long lastTelemetryTime = 0;
+    unsigned long lastConnectionCheck = 0;
 
     // Reconnection
     unsigned long lastConnectAttempt = 0;

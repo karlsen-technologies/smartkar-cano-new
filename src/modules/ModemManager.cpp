@@ -1,5 +1,6 @@
 #include "ModemManager.h"
 #include "PowerManager.h"
+#include "LinkManager.h"
 #include "../util.h"
 
 #include <Arduino.h>
@@ -179,8 +180,7 @@ String ModemManager::getSimCCID() {
 }
 
 int16_t ModemManager::getSignalQuality() {
-    if (!modem) return 0;
-    return modem->getSignalQuality();
+    return cachedSignalQuality;
 }
 
 // State machine helpers
@@ -196,6 +196,13 @@ void ModemManager::setState(ModemState newState) {
         state = newState;
         stateEntryTime = millis();
         lastLoopTime = millis();
+        
+        // Reset cached signal quality when entering non-connected states
+        if (newState == ModemState::OFF || 
+            newState == ModemState::MODEM_ERROR || 
+            newState == ModemState::NO_SIM) {
+            cachedSignalQuality = 0;
+        }
     }
 }
 
@@ -263,6 +270,11 @@ void ModemManager::handleSearchingState() {
     }
     lastLoopTime = millis();
 
+    // Update cached signal quality
+    if (modem) {
+        cachedSignalQuality = modem->getSignalQuality();
+    }
+
     RegStatus regStatus = checkRegistration();
     
     switch (regStatus) {
@@ -289,6 +301,11 @@ void ModemManager::handleRegisteredState() {
     if (!stateJustChanged()) {
         // Periodic check that we're still registered
         if (millis_since(lastLoopTime) > REGISTERED_CHECK_INTERVAL) {
+            // Update cached signal quality
+            if (modem) {
+                cachedSignalQuality = modem->getSignalQuality();
+            }
+            
             RegStatus regStatus = checkRegistration();
             if (regStatus != RegStatus::REGISTERED_HOME && regStatus != RegStatus::REGISTERED_ROAMING) {
                 setState(ModemState::SEARCHING);
@@ -327,6 +344,11 @@ void ModemManager::handleConnectedState() {
         return;
     }
     lastLoopTime = millis();
+
+    // Update cached signal quality
+    if (modem) {
+        cachedSignalQuality = modem->getSignalQuality();
+    }
 
     // Verify we're still connected
     if (!modem->isGprsConnected()) {
@@ -458,18 +480,18 @@ void ModemManager::handleInterrupt() {
     if (!hasInterrupt) return;
     hasInterrupt = false;
 
-    // Check for URC type
-    int urc = modem->waitResponse(15L, "+APP", "+CMT:", "+CA");
+    // Check for URCs we need to handle ourselves (not handled by TinyGSM)
+    // TinyGSM's handleURCs() handles: +CADATAIND, +CASTATE, +CARECV, time updates, etc.
+    int urc = modem->waitResponse(100L, "+APP", "+CMT:");
 
     if (urc == 1) {
-        // +APP PDP: ACTIVE/DEACTIVE
+        // +APP PDP: ACTIVE/DEACTIVE - data connection state change
         int appState = modem->waitResponse("ACTIVE", "DEACTIVE");
         modem->waitResponse("\r\n");
         
         if (appState == 1) {
             Serial.println("[MODEM] Data connection active");
             setState(ModemState::CONNECTED);
-            if (activityCallback) activityCallback();
         } else {
             Serial.println("[MODEM] Data connection deactivated");
             RegStatus regStatus = checkRegistration();
@@ -479,6 +501,8 @@ void ModemManager::handleInterrupt() {
                 setState(ModemState::SEARCHING);
             }
         }
+        if (activityCallback) activityCallback();
+        
     } else if (urc == 2) {
         // +CMT: SMS received
         String message;
@@ -490,10 +514,17 @@ void ModemManager::handleInterrupt() {
         Serial.println(message);
         
         if (activityCallback) activityCallback();
-    } else if (urc == 3) {
-        // +CA: TCP layer notification
-        Serial.println("[MODEM] TCP notification - LinkManager should handle");
-        // LinkManager will poll for this via its own mechanisms
+        
+    } else {
+        // No match for +APP or +CMT - let TinyGSM handle it via maintain()
+        // This processes +CADATAIND, +CASTATE, +CARECV, time updates, etc.
+        // handleURCs() will set got_data=true and sock_connected as needed
+        modem->maintain();
+        
+        // Notify LinkManager to check for data/connection changes
+        if (LinkManager::instance()) {
+            LinkManager::instance()->handleTCPInterrupt();
+        }
         if (activityCallback) activityCallback();
     }
 }
