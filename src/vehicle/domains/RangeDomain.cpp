@@ -39,9 +39,6 @@ void RangeDomain::processReichweite01(const uint8_t* data) {
     
     RangeState& range = vehicleState.range;
     
-    // Check for significant range change (> 5 km)
-    bool rangeChanged = (abs((int)decoded.totalRange - (int)range.totalRangeKm) > 5);
-    
     // Skip invalid values (2045-2047)
     if (decoded.totalRange < INVALID_RANGE) {
         range.totalRangeKm = decoded.totalRange;
@@ -57,11 +54,7 @@ void RangeDomain::processReichweite01(const uint8_t* data) {
     range.consumptionUnit = decoded.consumptionUnit;
     range.reichweite01Update = millis();
     
-    // Log on significant change
-    if (rangeChanged && decoded.totalRange < INVALID_RANGE) {
-        Serial.printf("[RangeDomain] Range: %d km (electric: %d km, consumption: %.1f)\r\n",
-            decoded.totalRange, decoded.electricRange, decoded.consumption);
-    }
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }
 
 void RangeDomain::processReichweite02(const uint8_t* data) {
@@ -69,11 +62,6 @@ void RangeDomain::processReichweite02(const uint8_t* data) {
     BroadcastDecoder::Reichweite02Data decoded = BroadcastDecoder::decodeReichweite02(data);
     
     RangeState& range = vehicleState.range;
-    
-    // Track state changes
-    bool reserveChanged = (decoded.reserveWarning != range.reserveWarning);
-    RangeTendency newTendency = static_cast<RangeTendency>(decoded.tendency);
-    bool tendencyChanged = (newTendency != range.tendency);
     
     // Update display values (skip invalid)
     if (decoded.displayTotalRange < INVALID_RANGE) {
@@ -83,18 +71,10 @@ void RangeDomain::processReichweite02(const uint8_t* data) {
         range.displayElectricRangeKm = decoded.displayElectricRange;
     }
     
-    range.tendency = newTendency;
+    range.tendency = static_cast<RangeTendency>(decoded.tendency);
     range.reserveWarning = decoded.reserveWarning;
     range.displayInMiles = decoded.displayInMiles;
     range.reichweite02Update = millis();
     
-    // Log state changes
-    if (reserveChanged) {
-        Serial.printf("[RangeDomain] Reserve warning: %s\r\n",
-            decoded.reserveWarning ? "ACTIVE" : "off");
-    }
-    if (tendencyChanged) {
-        Serial.printf("[RangeDomain] Range tendency: %s\r\n",
-            range.tendencyStr());
-    }
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }

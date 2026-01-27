@@ -70,6 +70,10 @@ Extended CAN Frame:
 
 ## Known CAN IDs
 
+### BAP Channel CAN IDs
+
+BAP channels use 29-bit extended CAN IDs with the format `0x1733XXYY` where XX is the LSG/Device ID and YY indicates message direction. See [Channel Architecture](#channel-architecture) for details.
+
 ### System/Wake Messages
 
 | CAN ID | Extended | Direction | Purpose |
@@ -121,6 +125,134 @@ These are one-way broadcast messages from various modules:
 ## BAP Protocol
 
 BAP (Bedien- und Anzeigeprotokoll / Control and Display Protocol) is VW's proprietary two-way communication protocol implemented over CAN.
+
+### Channel Architecture
+
+BAP uses dedicated CAN IDs to create isolated communication channels between clients (ASG) and servers (FSG). Each logical device (LSG) has its own channel with unique CAN IDs, ensuring messages don't interfere with each other.
+
+#### CAN ID Structure
+
+BAP CAN IDs are 29-bit extended identifiers. They generally follow a pattern but the exact IDs must be defined per channel:
+
+```
+0x1733XXYY (typical pattern, but not guaranteed)
+
+Where:
+  1733     = BAP protocol identifier (common prefix)
+  XX       = LSG/Device ID (e.g., 25 = Battery Control, 0D = Door Locking)
+  YY       = Channel-specific suffix
+```
+
+**Important:** The suffix values (YY) are NOT standardized. Each channel defines its own ASG and FSG CAN IDs. You must look up the specific IDs for each channel - do not assume a pattern.
+
+#### Channel Definitions
+
+Each BAP channel must define:
+- Which CAN ID(s) the ASG (client) transmits on
+- Which CAN ID(s) the FSG (server) transmits on
+
+**Battery Control (LSG 0x25):**
+| CAN ID | Direction | Role |
+|--------|-----------|------|
+| 0x17332501 | ASG → FSG | Commands |
+| 0x17332510 | FSG → ASG | Responses/Status |
+
+**Door Locking (LSG 0x0D):**
+| CAN ID | Direction | Role |
+|--------|-----------|------|
+| 0x17330D00 | ASG → FSG | Commands |
+| 0x17330D01 | FSG → ASG | Responses |
+| 0x17330D02 | FSG → ASG | Responses (alternate) |
+| 0x17330D10 | FSG → ASG | Status broadcasts |
+
+**Extended Network Interface (LSG 0x37):**
+| CAN ID | Direction | Role |
+|--------|-----------|------|
+| 0x17333700 | ASG → FSG | Commands |
+| 0x17333710 | FSG → ASG | Responses |
+| 0x17333711 | FSG → ASG | Responses (alternate) |
+
+#### Channel Isolation
+
+```
+Battery Control Channel:
+  ┌─────────────────────────────────────────────────────────┐
+  │  ASG (Client)              FSG (Server)                 │
+  │       │                         │                       │
+  │       │──── 0x17332501 ────────>│  Commands             │
+  │       │<─── 0x17332510 ─────────│  Responses/Status     │
+  └─────────────────────────────────────────────────────────┘
+
+Door Locking Channel:
+  ┌─────────────────────────────────────────────────────────┐
+  │  ASG (Client)              FSG (Server)                 │
+  │       │                         │                       │
+  │       │──── 0x17330D00 ────────>│  Commands             │
+  │       │<─── 0x17330D01 ─────────│  Responses            │
+  │       │<─── 0x17330D02 ─────────│  Responses (alt)      │
+  │       │<─── 0x17330D10 ─────────│  Status broadcasts    │
+  └─────────────────────────────────────────────────────────┘
+```
+
+#### Why This Matters
+
+1. **CAN Filtering**: Filter on specific CAN IDs to only receive messages for channels you care about
+2. **No Collision**: Multiple BAP conversations can happen simultaneously without interference
+3. **Simple Routing**: The CAN ID identifies which channel the message belongs to
+4. **Channel-Specific**: Always look up the exact CAN IDs for each channel - don't assume patterns
+
+#### All Known BAP Channels
+
+The following channels were identified from e-Golf comfort CAN traces and DBC files:
+
+| LSG ID | Name | ASG CAN ID(s) | FSG CAN ID(s) | Description |
+|--------|------|---------------|---------------|-------------|
+| 0x01 | Klima1 | 0x17330100 | 0x17330110 | Climate control |
+| 0x03 | ParkHeater | 0x17330301 | - | Standheizung |
+| 0x07 | RDK | - | 0x17330710 | Tire pressure (Reifendruck) |
+| 0x08 | ? | 0x17330800 | 0x17330810 | Unknown |
+| 0x09 | Aussenlicht | 0x17330900 | 0x17330910 | Exterior lights |
+| 0x0A | ? | - | 0x17330A10, 0x17330A11 | Unknown |
+| 0x0C | ? | 0x17330C00 | 0x17330C10 | Unknown |
+| 0x0D | Doorlocking | 0x17330D00 | 0x17330D01, 0x17330D02, 0x17330D10 | Central locking |
+| 0x0E | ? | 0x17330E00 | 0x17330E10 | Unknown |
+| 0x0F | BC | 0x17330F00 | 0x17330F01, 0x17330F10 | Bordcomputer |
+| 0x11 | Uhrzeit | 0x17331100 | 0x17331101, 0x17331102, 0x17331110 | Clock/time |
+| 0x12 | ? | 0x17331200 | 0x17331201, 0x17331210 | Unknown |
+| 0x13 | ? | 0x17331300 | 0x17331310 | Unknown |
+| 0x19 | ? | - | 0x17331901, 0x17331910 | Unknown |
+| 0x1A | ? | - | 0x17331A01, 0x17331A10 | Unknown |
+| 0x1B | ? | - | 0x17331B01, 0x17331B10 | Unknown |
+| 0x1C | Hybrid | - | 0x17331C10 | Hybrid/EV status |
+| 0x1F | ? | - | 0x17331F10 | Unknown |
+| 0x21 | ? | - | 0x17332101, 0x17332110 | Unknown |
+| 0x23 | ? | 0x17332300 | 0x17332310 | Unknown |
+| 0x25 | BatteryControl | 0x17332501 | 0x17332510 | Charging, climate, SOC |
+| 0x28 | Telefon | 0x17332800, 0x17332801 | 0x17332810, 0x17332811 | Phone |
+| 0x29 | ? | - | 0x17332910 | Unknown |
+| 0x31 | Audio | 0x17333100, 0x17333101 | 0x17333110, 0x17333111 | Audio system |
+| 0x32 | Navigation | 0x17333200, 0x17333201 | 0x17333210, 0x17333211 | Navigation |
+| 0x33 | eCall | 0x17333300 | 0x17333310 | Emergency call |
+| 0x37 | ENI | 0x17333700 | 0x17333710, 0x17333711 | Extended Network Interface |
+| 0x3C | EfficiencyAssist | - | 0x17333C01, 0x17333C10 | Efficiency assistant |
+| 0x46 | ? | 0x17334600 | 0x17334610 | Unknown |
+| 0x67 | BAP Init | - | - | Channel initialization |
+
+**Notes:**
+- ASG = client (sends commands), FSG = server (sends responses)
+- Some channels have multiple FSG CAN IDs for different response types
+- CAN IDs with suffix 0x00-0x0F are typically ASG, 0x10+ are typically FSG
+- "?" indicates channel seen in traces but name unknown
+
+#### Key Channels for OCU Replacement
+
+| LSG | Name | Purpose | Priority |
+|-----|------|---------|----------|
+| 0x25 | BatteryControl | SOC, charging, climate control | **Critical** |
+| 0x0D | Doorlocking | Lock/unlock status | High |
+| 0x37 | ENI | Trip data, vehicle info | Medium |
+| 0x01 | Klima1 | Climate status | Medium |
+| 0x1C | Hybrid | EV-specific status | Medium |
 
 ### Terminology
 
@@ -187,15 +319,48 @@ Result: 29 58 00 01 00 00 00 00
 
 ### Long BAP Message Format
 
+Long messages span multiple CAN frames. A **group** field in the header allows up to 4 concurrent message streams per CAN ID.
+
+#### Byte 0 Format (Control Byte)
+
+The first byte of every long BAP frame has this structure:
+
+```
+Byte 0: [Long:1][Cont:1][Group:2][Index:4]
+         Bit 7   Bit 6   Bits 5-4  Bits 3-0
+
+Long (Bit 7):  1 = Long message, 0 = Short message
+Cont (Bit 6):  0 = Start frame, 1 = Continuation frame
+Group (Bits 5-4): Message group (0-3), allows 4 concurrent streams
+Index (Bits 3-0): Sequence counter (0-15), wraps to 0 after 15
+```
+
+**Group Values:**
+
+| Group | Start Byte0 | Continuation Range |
+|-------|-------------|-------------------|
+| 0     | 0x80        | 0xC0 - 0xCF       |
+| 1     | 0x90        | 0xD0 - 0xDF       |
+| 2     | 0xA0        | 0xE0 - 0xEF       |
+| 3     | 0xB0        | 0xF0 - 0xFF       |
+
+**Key Facts (verified from trace analysis):**
+- START frames always have Index = 0 (only 0x80, 0x90, 0xA0, 0xB0 observed)
+- First continuation frame also has Index = 0 (same as start)
+- Index increments with each subsequent continuation
+- Index wraps from 15 back to 0 (stays within same group)
+- Maximum 4 concurrent messages per CAN ID (one per group)
+
 #### Start Frame (First CAN frame)
 
 ```
-Byte 0: [1][0][MessageIndex:6]
-         │  │  └── Index for tracking multi-message transfers
+Byte 0: [1][0][Group:2][0000]
+         │  │  │        └── Index always 0 for start frames
+         │  │  └── Group (0-3)
          │  └── Frame type: 0 = Start
          └── Message type: 1 = Long
 
-Byte 1: Total payload length (including header)
+Byte 1: Total payload length (bytes after BAP header, not including header)
 
 Byte 2: [0][OpCode:3][DeviceID_hi:4]  <- Same as short message header
 Byte 3: [DeviceID_lo:2][FunctionID:6] <- Same as short message header
@@ -206,13 +371,105 @@ Bytes 4-7: First 4 bytes of payload
 #### Continuation Frame (Subsequent CAN frames)
 
 ```
-Byte 0: [1][1][MessageIndex:6]
-         │  │  └── Must match start frame's index
+Byte 0: [1][1][Group:2][Index:4]
+         │  │  │        └── Sequence counter (0-15, wraps)
+         │  │  └── Group (must match start frame)
          │  └── Frame type: 1 = Continuation
          └── Message type: 1 = Long
 
 Bytes 1-7: Next 7 bytes of payload
 ```
+
+#### Continuation Sequence Example
+
+For a message in Group 0 requiring 20 continuation frames:
+
+```
+START:   80  (group=0, index=0)
+CONT 1:  C0  (group=0, index=0)  <- First cont has SAME index as start
+CONT 2:  C1  (group=0, index=1)
+CONT 3:  C2  (group=0, index=2)
+...
+CONT 16: CF  (group=0, index=15)
+CONT 17: C0  (group=0, index=0)  <- Wraps back to 0, stays in group!
+CONT 18: C1  (group=0, index=1)
+CONT 19: C2  (group=0, index=2)
+CONT 20: C3  (group=0, index=3)
+```
+
+#### Concurrent Messages Example
+
+A single FSG can interleave frames from multiple messages using different groups:
+
+```
+CAN ID 0x17332510 (BatteryControl FSG):
+  80 72 49 59 ...  <- Group 0 START: ProfilesArray (large message)
+  90 1F 49 5A ...  <- Group 1 START: PowerProvidersArray (interleaved)
+  C0 ...           <- Group 0 CONT: ProfilesArray continuation
+  D0 ...           <- Group 1 CONT: PowerProvidersArray continuation
+  A0 09 49 51 ...  <- Group 2 START: ChargeState (short, interleaved)
+  C1 ...           <- Group 0 CONT: ProfilesArray continuation
+  E0 ...           <- Group 2 CONT: ChargeState continuation
+  D1 ...           <- Group 1 CONT: PowerProvidersArray continuation
+  ...
+```
+
+#### Frame Assembly Algorithm
+
+```python
+# Assembling long BAP messages with group support
+# Key: (can_id, group) - only one message per group at a time
+assembly_buffers = {}
+
+def process_frame(can_id, data):
+    is_long = bool(data[0] & 0x80)
+    if not is_long:
+        return decode_short_message(data)
+    
+    is_cont = bool(data[0] & 0x40)
+    group = (data[0] >> 4) & 0x03
+    index = data[0] & 0x0F
+    
+    key = (can_id, group)
+    
+    if not is_cont:
+        # START frame - index should always be 0
+        assembly_buffers[key] = {
+            'expected_length': data[1],
+            'payload': list(data[4:]),  # First 4 payload bytes
+            'next_index': 0,            # First cont will have index 0
+        }
+    else:
+        # CONTINUATION frame
+        if key in assembly_buffers:
+            buf = assembly_buffers[key]
+            
+            # Verify index matches expected (handles wrap at 16)
+            if index == buf['next_index']:
+                buf['payload'].extend(data[1:])
+                buf['next_index'] = (index + 1) & 0x0F  # Wrap at 16
+                
+                # Check if complete
+                if len(buf['payload']) >= buf['expected_length']:
+                    complete = assembly_buffers.pop(key)
+                    return decode_long_message(data[2:4], complete['payload'])
+    
+    return None  # Message not yet complete
+
+def decode_long_message(header_bytes, payload):
+    """Decode completed long message."""
+    opcode = (header_bytes[0] >> 4) & 0x07
+    device_id = ((header_bytes[0] & 0x0F) << 2) | ((header_bytes[1] >> 6) & 0x03)
+    function_id = header_bytes[1] & 0x3F
+    return {
+        'opcode': opcode,
+        'device_id': device_id,
+        'function_id': function_id,
+        'payload': payload[:expected_length]  # Trim padding
+    }
+```
+
+**Assembly buffer key: `(can_id, group)`** - not the full 6-bit field!
 
 **Encoding Example - Configure Profile:**
 ```
@@ -221,17 +478,19 @@ Function ID: 0x19 (ProfilesArray)
 OpCode: 0x02 (SetGet)
 Payload: [0x22, 0x06, 0x00, 0x01, 0x06, 0x00, 0x20, 0x00] (8 bytes)
 
-Frame 1 (Start):
-  Byte 0: [1][0][000000] = 0x80
-  Byte 1: 0x08 (8 bytes total payload after header)
+Frame 1 (Start, Group 0):
+  Byte 0: [1][0][00][0000] = 0x80
+          Long Cont Grp  Idx
+  Byte 1: 0x08 (8 bytes payload length)
   Byte 2: [0][010][1001] = 0x29
   Byte 3: [01][011001] = 0x59
   Bytes 4-7: 0x22, 0x06, 0x00, 0x01
   
   Result: 80 08 29 59 22 06 00 01
 
-Frame 2 (Continuation):
-  Byte 0: [1][1][000000] = 0xC0
+Frame 2 (Continuation, Group 0, Index 0):
+  Byte 0: [1][1][00][0000] = 0xC0
+          Long Cont Grp  Idx
   Bytes 1-4: 0x06, 0x00, 0x20, 0x00
   
   Result: C0 06 00 20 00 (padded or truncated to actual length)
@@ -432,6 +691,8 @@ messages = [
 
 Received on CAN ID `0x17332510` with function 0x10.
 
+**Verified against `connect_charger_sleep.csv` trace - documentation is correct.**
+
 ```
 Byte 0: [LockSetup:4][LockState:4]
 Byte 1: [SupplyState:4][PlugState:4]
@@ -466,15 +727,26 @@ Byte 1: [SupplyState:4][PlugState:4]
 | 0x1 | Plugged |
 | 0xF | Init/Unknown |
 
+**Example from trace (charger connected, charging):**
+```
+Raw: 1F 11
+  LockSetup: 1 (Lock requested)
+  LockState: F (Init)
+  SupplyState: 1 (Active - power flowing)
+  PlugState: 1 (Plugged)
+```
+
 ### ChargeState (Function 0x11)
+
+**Verified against `connect_charger_sleep.csv` trace - documentation is correct.**
 
 ```
 Byte 0: [ChargeMode:4][ChargeState:4]
 Byte 1: currentChargeLevel (0-100%)
-Byte 2: remainingChargeTime (minutes)
+Byte 2: remainingChargeTime (minutes, 0xFF = unknown)
 Byte 3: currentChargeRange
 Byte 4: unitRange
-Byte 5: current (charging current)
+Byte 5: current (charging current, 0xFF = unknown)
 Byte 6: [batteryClimateState:4][reserved:4]
 Byte 7: reserved
 Byte 8: [startReason:4][targetSOC:4]
@@ -521,6 +793,17 @@ Byte 8: [startReason:4][targetSOC:4]
 | 0x0 | Min SOC |
 | 0x1 | Max SOC |
 | 0xF | Init |
+
+**Example from trace (charging active):**
+```
+Raw: 12 2F 73 00 FF FF 00 FF 31
+  ChargeMode: 1 (AC charging)
+  ChargeState: 2 (Running)
+  SOC: 47%
+  Remaining time: 115 min
+  startReason: 3 (Timer 3)
+  targetSOC: 1 (Max SOC)
+```
 
 ### ClimateState (Function 0x12)
 

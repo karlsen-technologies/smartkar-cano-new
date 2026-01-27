@@ -37,7 +37,6 @@ void BatteryDomain::processBMS07(const uint8_t* data) {
     BroadcastDecoder::BMS07Data decoded = BroadcastDecoder::decodeBMS07(data);
     
     BatteryState& battery = vehicleState.battery;
-    bool wasCharging = battery.chargingActive;
     
     battery.chargingActive = decoded.chargingActive;
     battery.balancingActive = decoded.balancingActive;
@@ -45,19 +44,7 @@ void BatteryDomain::processBMS07(const uint8_t* data) {
     battery.maxEnergyWh = decoded.maxEnergyWh;
     battery.bms07Update = millis();
     
-    // Log charging state changes
-    if (decoded.chargingActive != wasCharging) {
-        Serial.printf("[BatteryDomain] Charging: %s\r\n", 
-            decoded.chargingActive ? "STARTED" : "STOPPED");
-    }
-    
-    // Log energy occasionally
-    static unsigned long lastLog = 0;
-    if (millis() - lastLog > 60000) {
-        Serial.printf("[BatteryDomain] Energy: %.0f/%.0f Wh (%.0f%%)\r\n",
-            battery.energyWh, battery.maxEnergyWh, energyPercent());
-        lastLog = millis();
-    }
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }
 
 void BatteryDomain::processBMS06(const uint8_t* data) {
@@ -69,13 +56,5 @@ void BatteryDomain::processBMS06(const uint8_t* data) {
     battery.temperature = temp;
     battery.tempUpdate = millis();
     
-    // Log occasionally or on significant change
-    static unsigned long lastLog = 0;
-    static float lastTemp = 0;
-    
-    if (millis() - lastLog > 60000 || abs(temp - lastTemp) > 2.0) {
-        Serial.printf("[BatteryDomain] Battery temp: %.1f°C\r\n", temp);
-        lastLog = millis();
-        lastTemp = temp;
-    }
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }

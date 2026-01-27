@@ -104,25 +104,37 @@ public:
         climateCount = climateFrames;
     }
     
+    // Get assembler statistics for debugging
+    void getAssemblerStats(uint32_t& shortMsgs, uint32_t& longMsgs, 
+                           uint32_t& longStarts, uint32_t& longConts,
+                           uint32_t& contErrors, uint32_t& pendingOverflows,
+                           uint32_t& staleReplacements, uint8_t& pendingCount,
+                           uint8_t& maxPendingCount) const {
+        shortMsgs = frameAssembler.shortMessagesDecoded;
+        longMsgs = frameAssembler.longMessagesDecoded;
+        longStarts = frameAssembler.longStartFrames;
+        longConts = frameAssembler.longContFrames;
+        contErrors = frameAssembler.continuationErrors;
+        pendingOverflows = frameAssembler.pendingOverflows;
+        staleReplacements = frameAssembler.staleReplacements;
+        pendingCount = frameAssembler.getPendingCount();
+        maxPendingCount = frameAssembler.maxPendingCount;
+    }
+    
 private:
     VehicleState& state;
     VehicleManager* manager;
     
-    // Frame counters for statistics
-    uint32_t plugFrames = 0;
-    uint32_t chargeFrames = 0;
-    uint32_t climateFrames = 0;
-    uint32_t otherFrames = 0;
+    // Frame assembler - handles short/long message abstraction
+    BapProtocol::BapFrameAssembler frameAssembler;
     
-    // Long message reassembly buffer
-    // Key: (messageIndex << 8) | functionId
-    static constexpr size_t MAX_LONG_MSG_SIZE = 64;
-    uint8_t longMsgBuffer[MAX_LONG_MSG_SIZE];
-    uint8_t longMsgLength = 0;
-    uint8_t longMsgExpectedLength = 0;
-    uint8_t longMsgFunctionId = 0;
-    uint8_t longMsgMessageIndex = 0;
-    bool longMsgInProgress = false;
+    // Frame counters for statistics
+    volatile uint32_t plugFrames = 0;
+    volatile uint32_t chargeFrames = 0;
+    volatile uint32_t climateFrames = 0;
+    volatile uint32_t otherFrames = 0;
+    volatile uint32_t ignoredRequests = 0;  // Request opcodes (not responses)
+    volatile uint32_t decodeErrors = 0;     // Payload too short, etc.
     
     // =========================================================================
     // Internal methods
@@ -131,8 +143,7 @@ private:
     /**
      * Handle a complete BAP message (short or reassembled long)
      */
-    void handleBapMessage(uint8_t functionId, uint8_t opcode, 
-                          const uint8_t* payload, uint8_t payloadLen);
+    void handleBapMessage(const BapProtocol::BapMessage& msg);
     
     /**
      * Process PlugState response (function 0x10)

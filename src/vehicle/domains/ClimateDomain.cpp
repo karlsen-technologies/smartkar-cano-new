@@ -36,23 +36,13 @@ void ClimateDomain::processKlima03(const uint8_t* data) {
     BroadcastDecoder::KlimaData decoded = BroadcastDecoder::decodeKlima03(data);
     
     ClimateState& climate = vehicleState.climate;
-    bool wasHeating = climate.standbyHeatingActive;
-    bool wasVent = climate.standbyVentActive;
     
     climate.insideTemp = decoded.insideTemp;
     climate.standbyHeatingActive = decoded.standbyHeatingActive;
     climate.standbyVentActive = decoded.standbyVentActive;
     climate.klimaUpdate = millis();
     
-    // Log changes to standby climate
-    if (decoded.standbyHeatingActive != wasHeating) {
-        Serial.printf("[ClimateDomain] Standby heating: %s\r\n", 
-            decoded.standbyHeatingActive ? "ON" : "OFF");
-    }
-    if (decoded.standbyVentActive != wasVent) {
-        Serial.printf("[ClimateDomain] Standby ventilation: %s\r\n", 
-            decoded.standbyVentActive ? "ON" : "OFF");
-    }
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }
 
 void ClimateDomain::processKlimaSensor02(const uint8_t* data) {
@@ -62,13 +52,9 @@ void ClimateDomain::processKlimaSensor02(const uint8_t* data) {
     float outsideTemp = rawTemp * 0.5f - 50.0f;
     
     ClimateState& climate = vehicleState.climate;
-    float prevTemp = climate.outsideTemp;
     
     climate.outsideTemp = outsideTemp;
     climate.outsideTempUpdate = millis();
     
-    // Log on significant change
-    if (abs(outsideTemp - prevTemp) > 1.0f) {
-        Serial.printf("[ClimateDomain] Outside temp: %.1f°C\r\n", outsideTemp);
-    }
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }

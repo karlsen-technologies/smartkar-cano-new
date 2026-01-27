@@ -45,12 +45,7 @@ void BodyDomain::processDriverDoor(const uint8_t* data) {
     door.windowPosition = decoded.windowPos;
     door.lastUpdate = millis();
     
-    // Log significant changes
-    static bool lastOpen = false;
-    if (decoded.doorOpen != lastOpen) {
-        Serial.printf("[BodyDomain] Driver door: %s\r\n", decoded.doorOpen ? "OPEN" : "closed");
-        lastOpen = decoded.doorOpen;
-    }
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }
 
 void BodyDomain::processPassengerDoor(const uint8_t* data) {
@@ -62,12 +57,7 @@ void BodyDomain::processPassengerDoor(const uint8_t* data) {
     door.windowPosition = decoded.windowPos;
     door.lastUpdate = millis();
     
-    // Log significant changes
-    static bool lastOpen = false;
-    if (decoded.doorOpen != lastOpen) {
-        Serial.printf("[BodyDomain] Passenger door: %s\r\n", decoded.doorOpen ? "OPEN" : "closed");
-        lastOpen = decoded.doorOpen;
-    }
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }
 
 void BodyDomain::processLockStatus(const uint8_t* data) {
@@ -82,12 +72,7 @@ void BodyDomain::processLockStatus(const uint8_t* data) {
     // Update lock state
     LockState newState = decoded.isLocked ? LockState::LOCKED : LockState::UNLOCKED;
     
-    // Log changes
-    if (body.centralLock != newState) {
-        Serial.printf("[BodyDomain] Central lock: %s (byte2=0x%02X, byte7=0x%02X)\r\n",
-            decoded.isLocked ? "LOCKED" : "UNLOCKED",
-            decoded.byte2, decoded.byte7);
-    }
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
     
     body.centralLock = newState;
     body.centralLockUpdate = millis();

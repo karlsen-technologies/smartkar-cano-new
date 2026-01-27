@@ -25,6 +25,44 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [2026-01-27] - BAP Protocol Verification
+
+### Added
+- **BAP Channel Architecture documentation** in `PROTOCOL.md`
+  - Explained channel isolation concept (each LSG has dedicated CAN IDs)
+  - Documented known channel definitions with their specific CAN IDs
+  - Added channel isolation diagrams
+  - Note: CAN ID suffixes are channel-specific, not a universal pattern
+
+- **Complete BAP Channel List** - 29 channels identified from traces
+  - Cross-referenced with DBC files for channel names
+  - Listed all ASG and FSG CAN IDs for each channel
+  - Identified key channels for OCU replacement (0x25, 0x0D, 0x37, 0x01, 0x1C)
+
+- **Long Message Assembly Clarification**
+  - Frame assembly must be tracked by (CAN ID + message index) tuple
+  - Multiple channels can have concurrent long messages with same message index
+  - Single channel can have multiple concurrent long messages with different indices
+  - Added pseudocode for correct frame assembly algorithm
+
+### Verified
+- **ChargeState (0x11)** - Verified against `connect_charger_sleep.csv`
+  - SOC reporting confirmed (47% = 0x2F)
+  - ChargeMode: 0=Off, 1=AC charging, 2=DC charging
+  - ChargeState: 1=Idle, 2=Running
+  - Remaining time in minutes (0xFF=unknown)
+  - startReason and targetSOC fields confirmed
+  
+- **PlugState (0x10)** - Verified against `connect_charger_sleep.csv`
+  - PlugState: 0=Unplugged, 1=Plugged
+  - SupplyState: 0=Inactive, 1=Active (power flowing)
+  - LockSetup: 0=Unlock, 1=Lock requested
+
+### Updated
+- `PROTOCOL.md` - Added verification notes and examples from real traces
+
+---
+
 ## [2026-01-27] - CAN Bus Availability Verification
 
 ### Fixed

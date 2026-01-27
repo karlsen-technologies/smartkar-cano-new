@@ -19,6 +19,9 @@ bool CanManager::setup() {
 }
 
 void CanManager::loop() {
+    // Main loop only handles state transitions and status checks
+    // Actual RX processing happens in dedicated task on Core 0
+    
     switch (state) {
         case CanState::OFF:
             // Nothing to do
@@ -28,15 +31,12 @@ void CanManager::loop() {
             // Check if driver is ready
             if (timeInState() > 100) {
                 setState(CanState::RUNNING);
-                Serial.println("[CAN] Controller running, listening for messages...");
+                Serial.println("[CAN] Controller running, CAN task processing on Core 0");
             }
             break;
 
         case CanState::RUNNING:
-            // Process any received messages
-            processReceivedMessages();
-            
-            // Periodically check bus status
+            // Periodically check bus status (from main loop - less critical)
             if (millis() - lastStatusCheck > STATUS_CHECK_INTERVAL) {
                 checkBusStatus();
                 lastStatusCheck = millis();
@@ -103,8 +103,32 @@ bool CanManager::start() {
     // Reset statistics
     messageCount = 0;
     errorCount = 0;
+    lastRxMissedCount = 0;
     lastStatusCheck = millis();
     lastTestMessage = millis();
+    
+    // Start the dedicated CAN receive task on Core 0
+    taskRunning = true;
+    BaseType_t taskResult = xTaskCreatePinnedToCore(
+        canTaskEntry,           // Task function
+        "CAN_RX",              // Task name
+        CAN_TASK_STACK_SIZE,   // Stack size
+        this,                  // Parameter (this pointer)
+        CAN_TASK_PRIORITY,     // Priority (higher than normal)
+        &canTaskHandle,        // Task handle
+        CAN_TASK_CORE          // Core 0 (separate from main loop on Core 1)
+    );
+    
+    if (taskResult != pdPASS) {
+        Serial.println("[CAN] Failed to create CAN task!");
+        twai_stop();
+        uninstallDriver();
+        setState(CanState::CAN_ERROR);
+        return false;
+    }
+    
+    Serial.printf("[CAN] CAN task started on Core %d with priority %d\r\n", 
+        CAN_TASK_CORE, CAN_TASK_PRIORITY);
 
     setState(CanState::STARTING);
     Serial.println("[CAN] Controller started");
@@ -117,17 +141,94 @@ bool CanManager::stop() {
     }
 
     Serial.println("[CAN] Stopping CAN controller...");
+    
+    // Stop the CAN task first
+    if (canTaskHandle != nullptr) {
+        taskRunning = false;
+        // Give the task time to exit gracefully
+        vTaskDelay(pdMS_TO_TICKS(50));
+        // Delete the task if it's still running
+        vTaskDelete(canTaskHandle);
+        canTaskHandle = nullptr;
+        Serial.println("[CAN] CAN task stopped");
+    }
 
     // Stop and uninstall the driver
     twai_stop();
     uninstallDriver();
 
     setState(CanState::OFF);
-    Serial.printf("[CAN] Stopped. Messages: %lu, Errors: %lu\r\n", messageCount, errorCount);
+    Serial.printf("[CAN] Stopped. Messages: %lu, Errors: %lu, Missed: %lu\r\n", 
+        messageCount, errorCount, lastRxMissedCount);
     return true;
 }
 
+// =============================================================================
+// CAN Task (runs on Core 0)
+// =============================================================================
+
+void CanManager::canTaskEntry(void* param) {
+    CanManager* self = static_cast<CanManager*>(param);
+    self->canTaskLoop();
+}
+
+void CanManager::canTaskLoop() {
+    Serial.printf("[CAN] Task running on Core %d\r\n", xPortGetCoreID());
+    
+    twai_message_t message;
+    
+    while (taskRunning) {
+        // Block waiting for a message with short timeout
+        // This is more efficient than polling and yields to other tasks
+        esp_err_t result = twai_receive(&message, pdMS_TO_TICKS(10));
+        
+        if (result == ESP_OK) {
+            messageCount++;
+            
+            // Process the message immediately
+            if (frameCallback) {
+                frameCallback(
+                    message.identifier,
+                    message.data,
+                    message.data_length_code,
+                    message.extd
+                );
+            }
+            
+            // Report activity
+            if (activityCallback) {
+                activityCallback();
+            }
+            
+            // After receiving one message, drain any others in the queue
+            // Use non-blocking receive to get all pending messages
+            while (twai_receive(&message, 0) == ESP_OK) {
+                messageCount++;
+                
+                if (frameCallback) {
+                    frameCallback(
+                        message.identifier,
+                        message.data,
+                        message.data_length_code,
+                        message.extd
+                    );
+                }
+                
+                if (activityCallback) {
+                    activityCallback();
+                }
+            }
+        }
+        // ESP_ERR_TIMEOUT is normal - just means no message in the timeout period
+    }
+    
+    Serial.println("[CAN] Task exiting");
+    vTaskDelete(NULL);
+}
+
+// =============================================================================
 // Private methods
+// =============================================================================
 
 void CanManager::setState(CanState newState) {
     if (state != newState) {
@@ -173,10 +274,15 @@ bool CanManager::installDriver() {
             break;
     }
 
-    // General configuration - normal mode for TX capability (debugging)
+    // General configuration - normal mode for TX capability
+    // Increase RX queue to handle bursts while task is processing
     twai_general_config_t generalConfig = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_PIN, CAN_RX_PIN, TWAI_MODE_NORMAL);
+    generalConfig.rx_queue_len = 32;  // Moderate queue - task drains quickly
+    generalConfig.tx_queue_len = 8;   // Keep TX small, we don't send much
     
-    // Accept all messages (no filtering for now)
+    // Accept all messages - hardware filtering is limited for our use case
+    // (we need many different standard IDs across a wide range)
+    // Software filtering happens in VehicleManager
     twai_filter_config_t filterConfig = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
     Serial.printf("[CAN] Installing driver (TX: GPIO%d, RX: GPIO%d)\r\n", CAN_TX_PIN, CAN_RX_PIN);
@@ -195,9 +301,9 @@ void CanManager::uninstallDriver() {
 }
 
 void CanManager::processReceivedMessages() {
+    // This is now only used as fallback - main processing in canTaskLoop()
     twai_message_t message;
     
-    // Process all available messages (non-blocking)
     while (twai_receive(&message, 0) == ESP_OK) {
         messageCount++;
         
@@ -205,7 +311,6 @@ void CanManager::processReceivedMessages() {
             logMessage(message);
         }
         
-        // Notify VehicleManager of received frame
         if (frameCallback) {
             frameCallback(
                 message.identifier,
@@ -215,7 +320,6 @@ void CanManager::processReceivedMessages() {
             );
         }
         
-        // Report activity (CAN traffic = vehicle is active)
         if (activityCallback) {
             activityCallback();
         }
@@ -247,9 +351,18 @@ void CanManager::checkBusStatus() {
             return;
         }
 
-        // Track errors
-        if (status.rx_missed_count > 0 || status.tx_failed_count > 0) {
-            errorCount += status.rx_missed_count + status.tx_failed_count;
+        // Log missed messages (RX buffer overflow)
+        if (status.rx_missed_count > lastRxMissedCount) {
+            uint32_t newMissed = status.rx_missed_count - lastRxMissedCount;
+            Serial.printf("[CAN] WARNING: %lu messages missed (total: %lu) - RX buffer overflow!\r\n",
+                newMissed, status.rx_missed_count);
+            errorCount += newMissed;
+            lastRxMissedCount = status.rx_missed_count;
+        }
+        
+        // Track TX failures
+        if (status.tx_failed_count > 0) {
+            errorCount += status.tx_failed_count;
         }
     }
 }

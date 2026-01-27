@@ -38,15 +38,20 @@ using CanFrameCallback = std::function<void(uint32_t, const uint8_t*, uint8_t, b
  * 
  * Responsibilities:
  * - Initialize and configure the ESP32 TWAI peripheral
- * - Receive CAN bus messages
+ * - Receive CAN bus messages on dedicated Core 0 task
+ * - Route frames to VehicleManager via callback
  * - Log/debug CAN traffic to console
- * - Future: Parse specific vehicle messages
+ * 
+ * Architecture:
+ * - CAN RX runs on Core 0 in a dedicated high-priority task
+ * - This prevents message loss when main loop is busy with serial/network
+ * - Frame processing callback is invoked from the CAN task context
  * 
  * Hardware:
  * - Uses ESP32's built-in TWAI (CAN) controller
  * - Connected to external CAN transceiver (e.g., SN65HVD230)
- * - TX: GPIO 36
- * - RX: GPIO 35
+ * - TX: GPIO 47
+ * - RX: GPIO 21
  */
 class CanManager : public IModule {
 public:
@@ -69,6 +74,7 @@ public:
     /**
      * Set the frame callback for routing frames to VehicleManager.
      * Called for each received CAN frame with (canId, data, dlc, extended).
+     * NOTE: This is called from the CAN task on Core 0!
      */
     void setFrameCallback(CanFrameCallback callback) { frameCallback = callback; }
 
@@ -83,13 +89,13 @@ public:
     bool isRunning() { return state == CanState::RUNNING; }
 
     /**
-     * Start the CAN controller.
+     * Start the CAN controller and dedicated receive task.
      * @return true if started successfully
      */
     bool start();
 
     /**
-     * Stop the CAN controller.
+     * Stop the CAN controller and receive task.
      * @return true if stopped successfully
      */
     bool stop();
@@ -116,6 +122,11 @@ public:
      * Get error count since start.
      */
     uint32_t getErrorCount() { return errorCount; }
+    
+    /**
+     * Get count of missed messages (RX buffer overflow).
+     */
+    uint32_t getMissedCount() { return lastRxMissedCount; }
 
 private:
     ActivityCallback activityCallback = nullptr;
@@ -128,9 +139,10 @@ private:
     CanSpeed canSpeed = CanSpeed::CAN_500KBPS;  // Default to OBD-II speed
     bool verbose = false;  // Log all received messages (disabled - too noisy)
 
-    // Statistics
-    uint32_t messageCount = 0;
-    uint32_t errorCount = 0;
+    // Statistics (accessed from both cores - use volatile)
+    volatile uint32_t messageCount = 0;
+    volatile uint32_t errorCount = 0;
+    volatile uint32_t lastRxMissedCount = 0;
 
     // Timing
     unsigned long stateEntryTime = 0;
@@ -143,6 +155,12 @@ private:
     // Transceiver enable: hardwired to 3.3V
     static const gpio_num_t CAN_TX_PIN = GPIO_NUM_47;
     static const gpio_num_t CAN_RX_PIN = GPIO_NUM_21;
+    
+    // Dedicated CAN task
+    TaskHandle_t canTaskHandle = nullptr;
+    volatile bool taskRunning = false;
+    static void canTaskEntry(void* param);
+    void canTaskLoop();
 
     // State machine helpers
     void setState(CanState newState);
@@ -159,4 +177,9 @@ private:
     // Timing constants
     static const unsigned long STATUS_CHECK_INTERVAL = 5000;  // Check bus status every 5s
     static const unsigned long TEST_MESSAGE_INTERVAL = 1000;  // Send test message every 1s
+    
+    // Task configuration
+    static const uint32_t CAN_TASK_STACK_SIZE = 4096;
+    static const UBaseType_t CAN_TASK_PRIORITY = 5;  // Higher than normal (1)
+    static const BaseType_t CAN_TASK_CORE = 0;       // Run on Core 0 (WiFi/BT core)
 };

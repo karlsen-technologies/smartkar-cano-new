@@ -188,7 +188,8 @@ class BAPMessage:
     """Represents a decoded BAP message."""
     can_id: int
     frame_type: str  # 'Short', 'LongStart', 'LongContinuation'
-    message_index: int
+    group: int       # Group (0-3) for long messages
+    index: int       # Index (0-15) for long messages
     opcode: Optional[int]
     device_id: Optional[int]
     function_id: Optional[int]
@@ -197,9 +198,16 @@ class BAPMessage:
     
     @classmethod
     def from_can_data(cls, can_id: int, data: List[int]) -> 'BAPMessage':
-        """Parse CAN frame data as a BAP message."""
+        """Parse CAN frame data as a BAP message.
+        
+        Long message byte 0 format: [Long:1][Cont:1][Group:2][Index:4]
+        - Bit 7: Long flag (1 = long message)
+        - Bit 6: Continuation flag (0 = start, 1 = continuation)
+        - Bits 5-4: Group (0-3)
+        - Bits 3-0: Index (0-15, wraps)
+        """
         if len(data) < 2:
-            return cls(can_id, 'Invalid', 0, None, None, None, [], None)
+            return cls(can_id, 'Invalid', 0, 0, None, None, None, [], None)
         
         first_byte = data[0]
         is_long = bool(first_byte & 0x80)
@@ -211,23 +219,25 @@ class BAPMessage:
             device_id = ((data[0] & 0x0F) << 2) | ((data[1] >> 6) & 0x03)
             function_id = data[1] & 0x3F
             payload = data[2:]
-            return cls(can_id, 'Short', 0, opcode, device_id, function_id, payload, len(payload))
+            return cls(can_id, 'Short', 0, 0, opcode, device_id, function_id, payload, len(payload))
         
-        elif not is_continuation:
-            # Long start message
-            message_index = (first_byte >> 2) & 0x0F
+        # Long message - extract group and index
+        group = (first_byte >> 4) & 0x03
+        index = first_byte & 0x0F
+        
+        if not is_continuation:
+            # Long start message (index should always be 0)
             total_length = data[1]
             opcode = (data[2] >> 4) & 0x07
             device_id = ((data[2] & 0x0F) << 2) | ((data[3] >> 6) & 0x03)
             function_id = data[3] & 0x3F
             payload = data[4:]
-            return cls(can_id, 'LongStart', message_index, opcode, device_id, function_id, payload, total_length)
+            return cls(can_id, 'LongStart', group, index, opcode, device_id, function_id, payload, total_length)
         
         else:
             # Long continuation message
-            message_index = (first_byte >> 2) & 0x0F
             payload = data[1:]
-            return cls(can_id, 'LongContinuation', message_index, None, None, None, payload, None)
+            return cls(can_id, 'LongContinuation', group, index, None, None, None, payload, None)
 
 
 class BAPEncoder:
@@ -260,30 +270,46 @@ class BAPEncoder:
     
     @staticmethod
     def long_message(opcode: int, device_id: int, function_id: int,
-                     payload: List[int], message_index: int = 0) -> List[List[int]]:
-        """Encode a long BAP message, returns list of CAN frame data."""
+                     payload: List[int], group: int = 0) -> List[List[int]]:
+        """Encode a long BAP message, returns list of CAN frame data.
+        
+        Long message byte 0 format: [Long:1][Cont:1][Group:2][Index:4]
+        - Bit 7: Long flag (1 = long message)
+        - Bit 6: Continuation flag (0 = start, 1 = continuation)
+        - Bits 5-4: Group (0-3) for concurrent message streams
+        - Bits 3-0: Index (0-15, increments per continuation, wraps)
+        
+        Args:
+            opcode: BAP operation code
+            device_id: BAP device ID
+            function_id: BAP function ID
+            payload: Data payload bytes
+            group: Message group (0-3) for concurrent streams, default 0
+        """
         frames = []
         b0, b1 = BAPEncoder.encode_header(opcode, device_id, function_id)
         
         # Total length includes the 2-byte header in the payload count
         total_length = len(payload) + 2
         
-        # Start frame
+        # Start frame: Long=1, Cont=0, Group=group, Index=0
         start_frame = [
-            0x80 | ((message_index & 0x0F) << 2),
+            0x80 | ((group & 0x03) << 4),  # 0x80/0x90/0xA0/0xB0 for groups 0-3
             total_length,
             b0, b1
         ]
         start_frame.extend(payload[:4])
         frames.append(start_frame)
         
-        # Continuation frames
+        # Continuation frames: Long=1, Cont=1, Group=group, Index=incrementing
         remaining = payload[4:]
+        index = 0  # First continuation starts at index 0
         while remaining:
-            cont_frame = [0xC0 | ((message_index & 0x0F) << 2)]
+            cont_frame = [0xC0 | ((group & 0x03) << 4) | (index & 0x0F)]
             cont_frame.extend(remaining[:7])
             frames.append(cont_frame)
             remaining = remaining[7:]
+            index = (index + 1) & 0x0F  # Wrap at 16
         
         return frames
 
@@ -622,8 +648,8 @@ class EGolfCANBus:
     """
     
     def __init__(self):
-        # Track long message assembly
-        self._long_messages: Dict[Tuple[int, int], BAPMessage] = {}
+        # Track long message assembly: key=(can_id, group), value={msg, next_index}
+        self._long_messages: Dict[Tuple[int, int], Dict[str, Any]] = {}
     
     def wake_up(self) -> List[CANMessage]:
         """Get wake-up sequence."""
@@ -679,23 +705,31 @@ class EGolfCANBus:
         msg = BAPMessage.from_can_data(can_id, data)
         
         if msg.frame_type == 'LongStart':
-            # Store for assembly
-            key = (can_id, msg.message_index)
-            self._long_messages[key] = msg
+            # Store for assembly - key by (can_id, group)
+            key = (can_id, msg.group)
+            self._long_messages[key] = {
+                'msg': msg,
+                'next_index': 0,  # First continuation will have index 0
+            }
             return None
         
         elif msg.frame_type == 'LongContinuation':
-            # Append to existing message
-            key = (can_id, msg.message_index)
+            # Append to existing message - match by group
+            key = (can_id, msg.group)
             if key in self._long_messages:
-                self._long_messages[key].payload.extend(msg.payload)
+                state = self._long_messages[key]
                 
-                start_msg = self._long_messages[key]
-                # Check if complete (total_length includes 2-byte header)
-                if start_msg.total_length is not None and len(start_msg.payload) >= (start_msg.total_length - 2):
-                    # Message complete, decode and return
-                    del self._long_messages[key]
-                    return self._decode_message(start_msg)
+                # Verify index matches expected
+                if msg.index == state['next_index']:
+                    state['msg'].payload.extend(msg.payload)
+                    state['next_index'] = (msg.index + 1) & 0x0F  # Wrap at 16
+                    
+                    start_msg = state['msg']
+                    # Check if complete
+                    if start_msg.total_length is not None and len(start_msg.payload) >= start_msg.total_length:
+                        # Message complete, decode and return
+                        del self._long_messages[key]
+                        return self._decode_message(start_msg)
             return None
         
         elif msg.frame_type == 'Short':

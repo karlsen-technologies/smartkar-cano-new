@@ -30,105 +30,51 @@ bool BapDomain::processFrame(uint32_t canId, const uint8_t* data, uint8_t dlc) {
         return false;
     }
     
-    if (dlc < 2) {
-        return false;
+    // Feed frame to assembler - it handles short/long message abstraction
+    BapMessage msg;
+    if (frameAssembler.processFrame(data, dlc, msg)) {
+        // Complete message ready - handle it
+        handleBapMessage(msg);
+        return true;
     }
     
-    // Decode BAP header
-    BapHeader header = decodeHeader(data, dlc);
-    
-    if (header.isLong && header.isContinuation) {
-        // Continuation frame for long message
-        if (!longMsgInProgress) {
-            // Unexpected continuation - ignore
-            return false;
-        }
-        
-        // Append payload to buffer
-        const uint8_t* payload = getContinuationPayload(data);
-        uint8_t payloadLen = dlc - 1;
-        
-        if (longMsgLength + payloadLen <= MAX_LONG_MSG_SIZE) {
-            memcpy(longMsgBuffer + longMsgLength, payload, payloadLen);
-            longMsgLength += payloadLen;
-        }
-        
-        // Check if complete
-        if (longMsgLength >= longMsgExpectedLength) {
-            // Message complete - process it
-            handleBapMessage(longMsgFunctionId, header.opcode, 
-                           longMsgBuffer, longMsgExpectedLength);
-            longMsgInProgress = false;
-        }
-        
-        return true;
-    }
-    else if (header.isLong && !header.isContinuation) {
-        // Long message start frame
-        longMsgInProgress = true;
-        longMsgMessageIndex = header.messageIndex;
-        longMsgFunctionId = header.functionId;
-        longMsgExpectedLength = header.totalLength - 2;  // Subtract 2-byte header
-        longMsgLength = 0;
-        
-        // Copy first 4 bytes of payload
-        const uint8_t* payload = getLongStartPayload(data);
-        uint8_t payloadLen = dlc - 4;
-        
-        if (payloadLen > 0 && payloadLen <= MAX_LONG_MSG_SIZE) {
-            memcpy(longMsgBuffer, payload, payloadLen);
-            longMsgLength = payloadLen;
-        }
-        
-        // Check if this short long message is already complete
-        if (longMsgLength >= longMsgExpectedLength) {
-            handleBapMessage(longMsgFunctionId, header.opcode,
-                           longMsgBuffer, longMsgExpectedLength);
-            longMsgInProgress = false;
-        }
-        
-        return true;
-    }
-    else {
-        // Short message - process immediately
-        const uint8_t* payload = getShortPayload(data);
-        uint8_t payloadLen = getShortPayloadLength(dlc);
-        
-        handleBapMessage(header.functionId, header.opcode, payload, payloadLen);
-        return true;
-    }
+    // Not a complete message yet (waiting for more frames for long msg)
+    // Still return true since we processed a valid BAP frame
+    return frameAssembler.isAssemblingLongMessage();
 }
 
 // =============================================================================
 // Message handling
 // =============================================================================
 
-void BapDomain::handleBapMessage(uint8_t functionId, uint8_t opcode, 
-                                  const uint8_t* payload, uint8_t payloadLen) {
+void BapDomain::handleBapMessage(const BapMessage& msg) {
     // Only process response opcodes (we don't care about requests from other modules)
     // OpCodes 0x03-0x07 are responses/indications
-    if (opcode < OpCode::HEARTBEAT) {
-        return;  // This is a request, not a response
+    if (msg.opcode < OpCode::HEARTBEAT) {
+        // Silently ignore request opcodes - no logging from CAN task
+        ignoredRequests++;
+        return;
     }
     
     // Route to appropriate handler based on function ID
-    switch (functionId) {
+    switch (msg.functionId) {
         case Function::PLUG_STATE:
-            processPlugState(payload, payloadLen);
+            processPlugState(msg.payload, msg.payloadLen);
             plugFrames++;
             break;
             
         case Function::CHARGE_STATE:
-            processChargeState(payload, payloadLen);
+            processChargeState(msg.payload, msg.payloadLen);
             chargeFrames++;
             break;
             
         case Function::CLIMATE_STATE:
-            processClimateState(payload, payloadLen);
+            processClimateState(msg.payload, msg.payloadLen);
             climateFrames++;
             break;
             
         default:
+            // Silently count unhandled functions - no logging from CAN task
             otherFrames++;
             break;
     }
@@ -136,6 +82,7 @@ void BapDomain::handleBapMessage(uint8_t functionId, uint8_t opcode,
 
 void BapDomain::processPlugState(const uint8_t* payload, uint8_t len) {
     if (len < 2) {
+        decodeErrors++;
         return;
     }
     
@@ -148,14 +95,16 @@ void BapDomain::processPlugState(const uint8_t* payload, uint8_t len) {
     plug.plugState = static_cast<uint8_t>(decoded.plugState);
     plug.lastUpdate = millis();
     
-    Serial.printf("[BapDomain] PlugState: %s, supply=%s\r\n",
-        plug.plugStateStr(), plug.hasSupply() ? "yes" : "no");
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }
 
 void BapDomain::processChargeState(const uint8_t* payload, uint8_t len) {
     if (len < 2) {
+        decodeErrors++;
         return;
     }
+    
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
     
     ChargeStateData decoded = decodeChargeState(payload, len);
     
@@ -168,13 +117,11 @@ void BapDomain::processChargeState(const uint8_t* payload, uint8_t len) {
     charge.chargingAmps = decoded.chargingAmps;
     charge.targetSoc = decoded.targetSoc;
     charge.lastUpdate = millis();
-    
-    Serial.printf("[BapDomain] ChargeState: SOC=%d%%, mode=%s, status=%s\r\n",
-        charge.socPercent, charge.chargeModeStr(), charge.chargeStatusStr());
 }
 
 void BapDomain::processClimateState(const uint8_t* payload, uint8_t len) {
     if (len < 1) {
+        decodeErrors++;
         return;
     }
     
@@ -191,9 +138,7 @@ void BapDomain::processClimateState(const uint8_t* payload, uint8_t len) {
     climate.climateState = decoded.climateState;
     climate.lastUpdate = millis();
     
-    Serial.printf("[BapDomain] ClimateState: active=%s, temp=%.1f°C, heat=%d cool=%d\r\n",
-        climate.climateActive ? "YES" : "no", climate.currentTempC,
-        climate.heating, climate.cooling);
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }
 
 // =============================================================================

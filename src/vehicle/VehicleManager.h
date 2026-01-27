@@ -10,6 +10,9 @@
 #include "domains/RangeDomain.h"
 #include "domains/BapDomain.h"
 
+// Enable this to track unique CAN IDs seen (adds overhead to CAN task)
+// #define DEBUG_CAN_IDS  // DISABLED - no longer needed
+
 // Forward declaration
 class CanManager;
 
@@ -20,7 +23,12 @@ class CanManager;
  * - Routes incoming CAN frames to appropriate domains
  * - Provides interface for sending CAN commands
  * - Manages vehicle wake/sleep state
- * - Holds the shared VehicleState
+ * - Holds the shared VehicleState (thread-safe via mutex)
+ * 
+ * Thread Safety:
+ * - CAN frames are processed from CAN task on Core 0
+ * - State is read from main loop on Core 1
+ * - Mutex protects all state access
  * 
  * Domains:
  * - BodyDomain: doors, locks, windows, horn/flash
@@ -39,6 +47,8 @@ public:
      */
     explicit VehicleManager(CanManager* canManager);
     
+    ~VehicleManager();
+    
     /**
      * Initialize all domains.
      * @return true if initialization succeeded
@@ -51,7 +61,8 @@ public:
     void loop();
     
     /**
-     * Process an incoming CAN frame. Called by CanManager.
+     * Process an incoming CAN frame. Called by CanManager from CAN task on Core 0.
+     * Thread-safe: acquires mutex internally.
      * @param canId The CAN identifier
      * @param data Frame data (8 bytes max)
      * @param dlc Data length code
@@ -70,52 +81,28 @@ public:
     bool sendCanFrame(uint32_t canId, const uint8_t* data, uint8_t dlc, bool extended = false);
     
     // =========================================================================
-    // State access
+    // State access (thread-safe)
     // =========================================================================
     
     /**
-     * Get read-only access to vehicle state.
+     * Get a copy of the vehicle state (thread-safe).
+     * Use this when you need multiple fields consistently.
      */
-    const VehicleState& getState() const { return state; }
+    VehicleState getStateCopy();
     
     /**
-     * Get mutable access to vehicle state (for domains).
+     * Check if vehicle CAN bus is active (thread-safe).
      */
-    VehicleState& getStateMutable() { return state; }
+    bool isVehicleAwake();
+    
+    /**
+     * Get count of CAN frames processed (thread-safe).
+     */
+    uint32_t getFrameCount();
     
     // =========================================================================
-    // Domain access
+    // Domain access (for command sending - use from main loop only)
     // =========================================================================
-    
-    /**
-     * Get the body domain (doors, locks, windows).
-     */
-    BodyDomain& body() { return bodyDomain; }
-    
-    /**
-     * Get the battery domain (SOC, voltage, current, charging).
-     */
-    BatteryDomain& battery() { return batteryDomain; }
-    
-    /**
-     * Get the drive domain (ignition, speed, odometer).
-     */
-    DriveDomain& drive() { return driveDomain; }
-    
-    /**
-     * Get the climate domain (temperatures).
-     */
-    ClimateDomain& climate() { return climateDomain; }
-    
-    /**
-     * Get the GPS domain (CAN-based GPS from infotainment).
-     */
-    GpsDomain& gps() { return gpsDomain; }
-    
-    /**
-     * Get the range domain (range estimation from cluster).
-     */
-    RangeDomain& range() { return rangeDomain; }
     
     /**
      * Get the BAP domain (charging/climate control via BAP protocol).
@@ -123,18 +110,8 @@ public:
     BapDomain& bap() { return bapDomain; }
     
     // =========================================================================
-    // Status
+    // Configuration
     // =========================================================================
-    
-    /**
-     * Check if vehicle CAN bus is active (receiving frames).
-     */
-    bool isVehicleAwake() const { return state.isAwake(); }
-    
-    /**
-     * Get count of CAN frames processed.
-     */
-    uint32_t getFrameCount() const { return state.canFrameCount; }
     
     /**
      * Enable/disable verbose logging of all CAN frames.
@@ -144,7 +121,8 @@ public:
 private:
     CanManager* canManager;
     
-    // Vehicle state (shared by all domains)
+    // Vehicle state (written by CAN task on Core 0, read by main loop on Core 1)
+    // No mutex - CAN task has priority, main loop reads may see stale data
     VehicleState state;
     
     // Domains
@@ -159,27 +137,19 @@ private:
     // Configuration
     bool verbose = false;
     
-    // Statistics
+    // Statistics (accessed from CAN task - use volatile)
     unsigned long lastLogTime = 0;
-    static constexpr unsigned long LOG_INTERVAL = 10000;  // Log stats every 10s (for testing)
+    static constexpr unsigned long LOG_INTERVAL = 10000;  // Log stats every 10s
     
     // Frame counters per domain (for debugging)
-    uint32_t bodyFrames = 0;
-    uint32_t batteryFrames = 0;
-    uint32_t driveFrames = 0;
-    uint32_t climateFrames = 0;
-    uint32_t gpsFrames = 0;
-    uint32_t rangeFrames = 0;
-    uint32_t bapFrames = 0;
-    uint32_t unhandledFrames = 0;
+    volatile uint32_t bodyFrames = 0;
+    volatile uint32_t batteryFrames = 0;
+    volatile uint32_t driveFrames = 0;
+    volatile uint32_t climateFrames = 0;
+    volatile uint32_t gpsFrames = 0;
+    volatile uint32_t rangeFrames = 0;
+    volatile uint32_t bapFrames = 0;
+    volatile uint32_t unhandledFrames = 0;
     
-    // Track unique CAN IDs seen (for debugging)
-    static constexpr size_t MAX_TRACKED_IDS = 64;
-    uint32_t seenCanIds[MAX_TRACKED_IDS] = {0};
-    uint32_t seenIdCounts[MAX_TRACKED_IDS] = {0};
-    uint8_t seenIdDlcs[MAX_TRACKED_IDS] = {0};  // Track DLC of each ID
-    size_t numSeenIds = 0;
-    
-    void trackCanId(uint32_t canId, uint8_t dlc);
     void logStatistics();
 };

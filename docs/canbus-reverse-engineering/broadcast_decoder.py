@@ -63,6 +63,10 @@ class BroadcastCANIds:
     
     # Commands (TM_01)
     TM_01 = 0x5A7                # Horn/Flash/Lock commands
+    
+    # Range Estimates (Reichweite)
+    REICHWEITE_01 = 0x5F5        # Range data: total/electric range, consumption
+    REICHWEITE_02 = 0x5F7        # Range display: display value, trend, warnings
 
 
 class ExtendedCANIds:
@@ -103,6 +107,19 @@ class GPSFixType(IntEnum):
     FIX_2D = 1
     FIX_3D = 2
     DGPS = 3
+
+
+class RangeTrend(IntEnum):
+    """Range estimate trend direction."""
+    STABLE = 0
+    INCREASING = 1
+    DECREASING = 2
+
+
+class ConsumptionUnit(IntEnum):
+    """Consumption value unit."""
+    KWH_PER_100KM = 0
+    KM_PER_KWH = 1
 
 
 # =============================================================================
@@ -266,6 +283,50 @@ class GPSHeading:
     raw_bytes: List[int]
 
 
+@dataclass
+class RangeData:
+    """Decoded range data from Reichweite_01 (0x5F5).
+    
+    This provides the car's calculated range estimate based on current
+    battery state and driving efficiency.
+    """
+    total_range_km: int           # Total estimated range (RW_Gesamt_Reichweite)
+    electric_range_km: int        # Primary/electric range (RW_Primaer_Reichweite)
+    consumption: float            # Consumption value (0.1 scale)
+    consumption_unit: ConsumptionUnit  # Unit: kWh/100km or km/kWh
+    max_display_range_km: int     # Maximum display range
+    load_profile_a: int           # Load profile for charging calc (amps)
+    reserve_warning_2: int        # Reserve warning level 2 (0-3)
+    raw_bytes: List[int]
+    
+    @property
+    def is_valid(self) -> bool:
+        """Check if range values are valid (not init/error values)."""
+        # Values 2045-2047 (0x7FD-0x7FF) indicate invalid/init
+        return self.total_range_km < 2045 and self.electric_range_km < 2045
+
+
+@dataclass
+class RangeDisplay:
+    """Decoded range display data from Reichweite_02 (0x5F7).
+    
+    This provides the values shown on the instrument cluster display.
+    """
+    display_range_km: int          # Total range for display (RW_Gesamt_Reichweite_Anzeige)
+    electric_display_range_km: int # Electric range for display
+    secondary_range_km: int        # Secondary range (N/A for BEV, usually invalid)
+    trend: RangeTrend              # Range trend: stable/up/down
+    reserve_warning: bool          # Reserve warning active
+    display_unit_miles: bool       # True if display unit is miles, False for km
+    text_index: int                # Text message index
+    raw_bytes: List[int]
+    
+    @property
+    def is_valid(self) -> bool:
+        """Check if range values are valid (not init/error values)."""
+        return self.display_range_km < 2045
+
+
 # =============================================================================
 # Main Decoder Class
 # =============================================================================
@@ -304,6 +365,9 @@ class BroadcastDecoder:
             BroadcastCANIds.NAV_POS_01: ('GPSPosition', self.decode_gps_position),
             # Extended CAN GPS
             ExtendedCANIds.NAV_POS_02_MAP_MATCHED: ('GPSMapMatched', self.decode_gps_map_matched),
+            # Range estimates (Reichweite)
+            BroadcastCANIds.REICHWEITE_01: ('RangeData', self.decode_range_data),
+            BroadcastCANIds.REICHWEITE_02: ('RangeDisplay', self.decode_range_display),
         }
         
         if can_id not in handlers:
@@ -815,6 +879,105 @@ class BroadcastDecoder:
             result['utc_reference'] = utc_ref
         
         return result
+    
+    # -------------------------------------------------------------------------
+    # Range (Reichweite) Signal Decoders
+    # -------------------------------------------------------------------------
+    
+    def decode_range_data(self, data: List[int]) -> RangeData:
+        """
+        Decode Reichweite_01 (0x5F5) range data.
+        
+        Signals (little-endian bit order):
+        - RW_Gesamt_Reichweite_Max_Anzeige: bits 0-10 (11 bits) - Max display range
+        - RW_Reservewarnung_2_aktiv: bits 16-17 (2 bits) - Reserve warning level 2
+        - RW_RWDS_Lastprofil: bits 18-28 (11 bits) - Load profile (amps)
+        - RW_Gesamt_Reichweite: bits 29-39 (11 bits) - Total estimated range
+        - RW_Prim_Reichweitenverbrauch: bits 40-50 (11 bits) - Consumption (0.1 scale)
+        - RW_Prim_Reichweitenv_Einheit: bits 51-52 (2 bits) - Unit
+        - RW_Primaer_Reichweite: bits 53-63 (11 bits) - Electric range
+        
+        Invalid/init values: 2045-2047 (0x7FD-0x7FF)
+        """
+        if len(data) < 8:
+            raise ValueError("Reichweite_01 requires 8 bytes")
+        
+        # Convert to 64-bit value (little endian)
+        val = 0
+        for i, b in enumerate(data):
+            val |= b << (i * 8)
+        
+        # Extract signals
+        max_display_range = val & 0x7FF                    # bits 0-10 (11 bits)
+        reserve_warning_2 = (val >> 16) & 0x3             # bits 16-17 (2 bits)
+        load_profile = (val >> 18) & 0x7FF                # bits 18-28 (11 bits)
+        total_range = (val >> 29) & 0x7FF                 # bits 29-39 (11 bits)
+        consumption_raw = (val >> 40) & 0x7FF             # bits 40-50 (11 bits)
+        consumption_unit = (val >> 51) & 0x3              # bits 51-52 (2 bits)
+        electric_range = (val >> 53) & 0x7FF              # bits 53-63 (11 bits)
+        
+        # Apply scaling to consumption (0.1 scale)
+        consumption = consumption_raw * 0.1
+        
+        return RangeData(
+            total_range_km=total_range,
+            electric_range_km=electric_range,
+            consumption=consumption,
+            consumption_unit=ConsumptionUnit(min(consumption_unit, 1)),  # Clamp to valid enum
+            max_display_range_km=max_display_range,
+            load_profile_a=load_profile,
+            reserve_warning_2=reserve_warning_2,
+            raw_bytes=data
+        )
+    
+    def decode_range_display(self, data: List[int]) -> RangeDisplay:
+        """
+        Decode Reichweite_02 (0x5F7) range display data.
+        
+        Signals (little-endian bit order):
+        - RW_Tendenz: bits 0-2 (3 bits) - Trend: 0=stable, 1=up, 2=down
+        - RW_Texte: bits 3-4 (2 bits) - Text message index
+        - RW_Reservewarnung_aktiv: bit 5 - Reserve warning active
+        - RW_Reichweite_Einheit_Anzeige: bit 6 - Display unit: 0=km, 1=miles
+        - RW_Gesamt_Reichweite_Anzeige: bits 7-17 (11 bits) - Total range for display
+        - RW_Primaer_Reichweite_Anzeige: bits 18-28 (11 bits) - Electric range for display
+        - RW_Sekundaer_Reichweite_Anzeige: bits 29-39 (11 bits) - Secondary range (N/A for BEV)
+        - RW_Sekundaer_Reichweite: bits 40-50 (11 bits) - Secondary range
+        - RW_Sek_Reichweitenv_Einheit: bits 51-52 (2 bits) - Secondary unit
+        - RW_Sek_Reichweitenverbrauch: bits 53-63 (11 bits) - Secondary consumption
+        
+        Invalid/init values: 2045-2047 (0x7FD-0x7FF)
+        """
+        if len(data) < 8:
+            raise ValueError("Reichweite_02 requires 8 bytes")
+        
+        # Convert to 64-bit value (little endian)
+        val = 0
+        for i, b in enumerate(data):
+            val |= b << (i * 8)
+        
+        # Extract signals
+        trend_raw = val & 0x7                             # bits 0-2 (3 bits)
+        text_index = (val >> 3) & 0x3                     # bits 3-4 (2 bits)
+        reserve_warning = bool((val >> 5) & 0x1)          # bit 5
+        display_unit_miles = bool((val >> 6) & 0x1)       # bit 6
+        display_range = (val >> 7) & 0x7FF                # bits 7-17 (11 bits)
+        electric_display_range = (val >> 18) & 0x7FF      # bits 18-28 (11 bits)
+        secondary_range = (val >> 29) & 0x7FF             # bits 29-39 (11 bits)
+        
+        # Clamp trend to valid enum values (0-2)
+        trend = RangeTrend(min(trend_raw, 2))
+        
+        return RangeDisplay(
+            display_range_km=display_range,
+            electric_display_range_km=electric_display_range,
+            secondary_range_km=secondary_range,
+            trend=trend,
+            reserve_warning=reserve_warning,
+            display_unit_miles=display_unit_miles,
+            text_index=text_index,
+            raw_bytes=data
+        )
 
 
 # =============================================================================
