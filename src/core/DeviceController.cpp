@@ -10,10 +10,15 @@
 
 #include <Arduino.h>
 #include "esp_sleep.h"
+#include "esp_system.h"
 
 // Default configuration
 #define DEFAULT_ACTIVITY_TIMEOUT    300000  // 5 minutes
 #define DEFAULT_MIN_AWAKE_TIME      10000   // 10 seconds
+
+// PMU retry configuration
+#define PMU_INIT_RETRIES            3       // Number of PMU init attempts before reboot
+#define PMU_RETRY_DELAY_MS          500     // Delay between PMU init attempts
 
 // Static instance for callback
 DeviceController* DeviceController::instance = nullptr;
@@ -74,8 +79,25 @@ void DeviceController::initModules() {
     powerManager->setLowBatteryCallback(&DeviceController::lowBatteryCallbackWrapper);
 
     // Setup in dependency order
-    if (!powerManager->setup()) {
-        Serial.println("[DEVICE] PowerManager setup failed!");
+    // PMU is critical - retry a few times, then reboot if it keeps failing
+    bool pmuOk = false;
+    for (int attempt = 1; attempt <= PMU_INIT_RETRIES; attempt++) {
+        if (powerManager->setup()) {
+            pmuOk = true;
+            break;
+        }
+        Serial.printf("[DEVICE] PMU init failed (attempt %d/%d)\r\n", attempt, PMU_INIT_RETRIES);
+        if (attempt < PMU_INIT_RETRIES) {
+            delay(PMU_RETRY_DELAY_MS);
+        }
+    }
+    
+    if (!pmuOk) {
+        Serial.println("[DEVICE] PMU init failed after all retries - rebooting!");
+        Serial.flush();
+        delay(100);
+        esp_restart();
+        // Won't reach here
     }
 
     // Don't setup modem if we're in low power mode - we'll check VBUS first
@@ -97,14 +119,11 @@ void DeviceController::initModules() {
         }
     }
     
-    // Setup CAN manager (independent of power mode)
-    if (!canManager->setup()) {
-        Serial.println("[DEVICE] CanManager setup failed!");
-    }
-    
-    // Start CAN bus for debugging (can be disabled later)
-    Serial.println("[DEVICE] Starting CAN bus...");
-    canManager->start();
+    // CAN manager disabled for testing sleep behavior
+    // if (!canManager->setup()) {
+    //     Serial.println("[DEVICE] CanManager setup failed!");
+    // }
+    // canManager->start();
 
     Serial.println("[DEVICE] All modules initialized");
 }

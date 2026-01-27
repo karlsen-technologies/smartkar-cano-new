@@ -147,10 +147,6 @@ private:
     LowBatteryCallback lowBatteryCallback = nullptr;
     bool initialized = false;
     
-    // Periodic logging
-    static constexpr uint32_t BATTERY_LOG_INTERVAL = 30000; // 30 seconds
-    uint32_t lastBatteryLogTime = 0;
-    
     // PMU IRQ handling
     static volatile bool pmuIrqTriggered;
     static void IRAM_ATTR pmuIrqHandler();

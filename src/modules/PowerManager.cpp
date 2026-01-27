@@ -113,22 +113,6 @@ void PowerManager::loop() {
         pmuIrqTriggered = false;
         handlePmuIrq();
     }
-    
-    // Periodic battery status logging
-    uint32_t now = millis();
-    if (now - lastBatteryLogTime >= BATTERY_LOG_INTERVAL) {
-        lastBatteryLogTime = now;
-        
-        uint16_t voltage = pmu->getBattVoltage();
-        uint8_t percent = pmu->getBatteryPercent();
-        bool vbus = pmu->isVbusIn();
-        const char* state = getChargingState();
-        
-        Serial.printf("[POWER] Battery: %umV %u%% | VBUS: %s | Charging: %s\r\n",
-            voltage, percent, 
-            vbus ? "yes" : "no",
-            state);
-    }
 }
 
 void PowerManager::prepareForSleep() {
