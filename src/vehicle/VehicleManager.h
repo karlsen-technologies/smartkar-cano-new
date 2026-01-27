@@ -6,6 +6,7 @@
 #include "domains/BatteryDomain.h"
 #include "domains/DriveDomain.h"
 #include "domains/ClimateDomain.h"
+#include "domains/GpsDomain.h"
 
 // Forward declaration
 class CanManager;
@@ -21,10 +22,10 @@ class CanManager;
  * 
  * Domains:
  * - BodyDomain: doors, locks, windows, horn/flash
- * - (Future) BatteryDomain: SOC, voltage, current, charging
- * - (Future) DriveDomain: ignition, speed, odometer
- * - (Future) ClimateDomain: temperatures, climate control
- * - (Future) GpsDomain: CAN-based GPS data
+ * - BatteryDomain: charging status, energy, temperature
+ * - DriveDomain: ignition, speed, odometer
+ * - ClimateDomain: temperatures, climate control
+ * - GpsDomain: CAN-based GPS data from infotainment
  */
 class VehicleManager {
 public:
@@ -102,6 +103,11 @@ public:
      */
     ClimateDomain& climate() { return climateDomain; }
     
+    /**
+     * Get the GPS domain (CAN-based GPS from infotainment).
+     */
+    GpsDomain& gps() { return gpsDomain; }
+    
     // =========================================================================
     // Status
     // =========================================================================
@@ -132,6 +138,7 @@ private:
     BatteryDomain batteryDomain;
     DriveDomain driveDomain;
     ClimateDomain climateDomain;
+    GpsDomain gpsDomain;
     
     // Configuration
     bool verbose = false;
@@ -145,6 +152,7 @@ private:
     uint32_t batteryFrames = 0;
     uint32_t driveFrames = 0;
     uint32_t climateFrames = 0;
+    uint32_t gpsFrames = 0;
     uint32_t unhandledFrames = 0;
     
     // Track unique CAN IDs seen (for debugging)

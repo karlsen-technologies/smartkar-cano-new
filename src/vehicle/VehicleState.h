@@ -177,25 +177,45 @@ struct ClimateState {
  * GPS state (from CAN, if available - backup to modem GPS)
  */
 struct CanGpsState {
-    // From 0x486
+    // From 0x486 (NavPos_01) - Position
     double latitude = 0.0;
     double longitude = 0.0;
-    bool hasFix = false;
     uint8_t satellites = 0;
+    uint8_t fixType = 0;        // 0=none, 1=2D, 2=3D, 3=DGPS
     unsigned long positionUpdate = 0;
     
-    // From 0x485
-    float altitude = 0.0f;
-    uint32_t utcTime = 0;
+    // From 0x485 (NavData_02) - Altitude & Satellites
+    float altitude = 0.0f;      // meters
+    uint32_t utcTime = 0;       // Unix timestamp
+    uint8_t satsInUse = 0;
+    uint8_t satsInView = 0;
+    uint8_t accuracy = 0;       // Horizontal accuracy in meters
     unsigned long altitudeUpdate = 0;
     
-    // From 0x484
-    float heading = 0.0f;
+    // From 0x484 (NavData_01) - Heading & DOP
+    float heading = 0.0f;       // degrees (0-359.9)
     float hdop = 0.0f;
+    float vdop = 0.0f;
+    float pdop = 0.0f;
+    bool gpsInit = false;
     unsigned long headingUpdate = 0;
     
+    bool hasFix() const {
+        return fixType >= 2;  // 2D or better
+    }
+    
     bool isValid() const {
-        return hasFix && (millis() - positionUpdate) < 30000;
+        return hasFix() && (millis() - positionUpdate) < 30000;
+    }
+    
+    const char* fixTypeStr() const {
+        switch (fixType) {
+            case 0: return "None";
+            case 1: return "2D";
+            case 2: return "3D";
+            case 3: return "DGPS";
+            default: return "Unknown";
+        }
     }
 };
 

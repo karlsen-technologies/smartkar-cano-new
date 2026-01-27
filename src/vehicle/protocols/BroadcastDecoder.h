@@ -432,4 +432,127 @@ inline KlimaData decodeKlima03(const uint8_t* data) {
     return result;
 }
 
+// ============================================================================
+// GPS signal extraction (from infotainment via gateway)
+// ============================================================================
+
+/**
+ * NavPos_01 (0x486) - GPS Position
+ */
+struct NavPosData {
+    double latitude;        // NP_LatDegree: degrees
+    double longitude;       // NP_LongDegree: degrees
+    bool latSouth;          // NP_LatDirection: 0=North, 1=South
+    bool longWest;          // NP_LongDirection: 0=East, 1=West
+    uint8_t satellites;     // NP_Sat: count
+    uint8_t fixType;        // NP_Fix: 0=none, 1=2D, 2=3D, 3=DGPS
+};
+
+inline NavPosData decodeNavPos01(const uint8_t* data) {
+    NavPosData result;
+    
+    // NP_LatDegree: bits 0-26 (27 bits), scale 0.000001°
+    uint32_t rawLat = extractSignalLE(data, 0, 27);
+    result.latitude = rawLat * 0.000001;
+    
+    // NP_LongDegree: bits 27-54 (28 bits), scale 0.000001°
+    uint32_t rawLong = extractSignalLE(data, 27, 28);
+    result.longitude = rawLong * 0.000001;
+    
+    // NP_LatDirection: bit 55 (0=North, 1=South)
+    result.latSouth = extractBit(data, 55);
+    
+    // NP_LongDirection: bit 56 (0=East, 1=West)
+    result.longWest = extractBit(data, 56);
+    
+    // NP_Sat: bits 57-61 (5 bits)
+    result.satellites = extractSignalLE(data, 57, 5);
+    
+    // NP_Fix: bits 62-63 (2 bits)
+    result.fixType = extractSignalLE(data, 62, 2);
+    
+    // Apply direction signs
+    if (result.latSouth) result.latitude = -result.latitude;
+    if (result.longWest) result.longitude = -result.longitude;
+    
+    return result;
+}
+
+/**
+ * NavData_02 (0x485) - Altitude, UTC, Satellites
+ */
+struct NavData02Data {
+    uint8_t satsInUse;      // ND_SatInUse: satellites in fix
+    uint8_t satsInView;     // ND_SatInView: satellites visible
+    float altitude;         // NP_Altitude: meters
+    uint32_t utcTime;       // ND_UTC: Unix timestamp
+    bool accuracyOK;        // Accuracy_OK flag
+    uint8_t accuracy;       // Horizontal accuracy in meters
+};
+
+inline NavData02Data decodeNavData02(const uint8_t* data) {
+    NavData02Data result;
+    
+    // ND_SatInUse: bits 0-4 (5 bits)
+    result.satsInUse = extractSignalLE(data, 0, 5);
+    
+    // Accuracy_OK: bit 5
+    result.accuracyOK = extractBit(data, 5);
+    
+    // ND_SatInView: bits 8-12 (5 bits)
+    result.satsInView = extractSignalLE(data, 8, 5);
+    
+    // Accuracy: bits 13-19 (7 bits), scale 2m
+    result.accuracy = extractSignalLE(data, 13, 7) * 2;
+    
+    // NP_Altitude: bits 20-31 (12 bits), scale 2, offset -500m
+    uint32_t rawAlt = extractSignalLE(data, 20, 12);
+    result.altitude = applyScaleOffset(rawAlt, 2.0f, -500.0f);
+    
+    // ND_UTC: bits 32-63 (32 bits) - Unix timestamp
+    result.utcTime = extractSignalLE(data, 32, 32);
+    
+    return result;
+}
+
+/**
+ * NavData_01 (0x484) - Heading and DOP values
+ */
+struct NavData01Data {
+    float vdop;             // ND_VDOP: Vertical DOP
+    float tdop;             // ND_TDOP: Time DOP
+    float hdop;             // ND_HDOP: Horizontal DOP
+    float gdop;             // ND_GDOP: Geometric DOP
+    float pdop;             // ND_PDOP: Position DOP
+    float heading;          // ND_Heading: degrees (0-359.9)
+    bool gpsInit;           // ND_Init: GPS initialized
+};
+
+inline NavData01Data decodeNavData01(const uint8_t* data) {
+    NavData01Data result;
+    
+    // ND_VDOP: bits 0-9 (10 bits), scale 0.025
+    result.vdop = extractSignalLE(data, 0, 10) * 0.025f;
+    
+    // ND_TDOP: bits 10-19 (10 bits), scale 0.025
+    result.tdop = extractSignalLE(data, 10, 10) * 0.025f;
+    
+    // ND_HDOP: bits 20-29 (10 bits), scale 0.025
+    result.hdop = extractSignalLE(data, 20, 10) * 0.025f;
+    
+    // ND_GDOP: bits 30-39 (10 bits), scale 0.025
+    result.gdop = extractSignalLE(data, 30, 10) * 0.025f;
+    
+    // ND_PDOP: bits 40-49 (10 bits), scale 0.025
+    result.pdop = extractSignalLE(data, 40, 10) * 0.025f;
+    
+    // ND_Heading: bits 50-61 (12 bits), scale 0.1°
+    result.heading = extractSignalLE(data, 50, 12) * 0.1f;
+    
+    // ND_Init: bit 62
+    result.gpsInit = extractBit(data, 62);
+    
+    return result;
+}
+
 } // namespace BroadcastDecoder
