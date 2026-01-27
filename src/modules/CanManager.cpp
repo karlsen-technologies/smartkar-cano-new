@@ -205,6 +205,16 @@ void CanManager::processReceivedMessages() {
             logMessage(message);
         }
         
+        // Notify VehicleManager of received frame
+        if (frameCallback) {
+            frameCallback(
+                message.identifier,
+                message.data,
+                message.data_length_code,
+                message.extd
+            );
+        }
+        
         // Report activity (CAN traffic = vehicle is active)
         if (activityCallback) {
             activityCallback();

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include "driver/twai.h"
 #include "../core/IModule.h"
+#include <functional>
 
 /**
  * CAN bus state machine states
@@ -25,6 +26,12 @@ enum class CanSpeed {
     CAN_500KBPS,    // Common for OBD-II
     CAN_1MBPS
 };
+
+/**
+ * Callback type for received CAN frames.
+ * Parameters: canId, data, dlc, extended
+ */
+using CanFrameCallback = std::function<void(uint32_t, const uint8_t*, uint8_t, bool)>;
 
 /**
  * CanManager - ESP32 TWAI (CAN) bus control module
@@ -58,6 +65,12 @@ public:
      * Set the activity callback for reporting activity to DeviceController.
      */
     void setActivityCallback(ActivityCallback callback) { activityCallback = callback; }
+
+    /**
+     * Set the frame callback for routing frames to VehicleManager.
+     * Called for each received CAN frame with (canId, data, dlc, extended).
+     */
+    void setFrameCallback(CanFrameCallback callback) { frameCallback = callback; }
 
     /**
      * Get current CAN state.
@@ -106,6 +119,7 @@ public:
 
 private:
     ActivityCallback activityCallback = nullptr;
+    CanFrameCallback frameCallback = nullptr;
 
     CanState state = CanState::OFF;
     CanState previousState = CanState::OFF;

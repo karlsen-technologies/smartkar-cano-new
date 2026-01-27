@@ -179,12 +179,11 @@ void PowerManager::enableDeepSleepWakeup() {
     rtc_gpio_pullup_dis(GPIO_NUM_21);  // Transceiver handles the level
     
     // Wake on LOW level on any pin (all are active low)
-    // TEMP: Testing without GPIO21 to verify modem wake works
-    uint64_t wakeMask = (1ULL << GPIO_NUM_3) | (1ULL << PMU_INPUT_PIN);
-    // uint64_t wakeMask = (1ULL << GPIO_NUM_3) | (1ULL << PMU_INPUT_PIN) | (1ULL << GPIO_NUM_21);
+    // CAN idles high (recessive), goes low when there's bus activity (dominant)
+    uint64_t wakeMask = (1ULL << GPIO_NUM_3) | (1ULL << PMU_INPUT_PIN) | (1ULL << GPIO_NUM_21);
     esp_sleep_enable_ext1_wakeup(wakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
     
-    Serial.printf("[POWER] Deep sleep wakeup enabled on GPIO3 (RI), GPIO%d (PMU)\r\n", PMU_INPUT_PIN);
+    Serial.printf("[POWER] Deep sleep wakeup enabled on GPIO3 (RI), GPIO%d (PMU), GPIO21 (CAN RX)\r\n", PMU_INPUT_PIN);
 }
 
 void PowerManager::disableDeepSleepWakeup() {

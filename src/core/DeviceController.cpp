@@ -4,6 +4,7 @@
 #include "../modules/ModemManager.h"
 #include "../modules/LinkManager.h"
 #include "../modules/CanManager.h"
+#include "../vehicle/VehicleManager.h"
 #include "../providers/DeviceProvider.h"
 #include "../providers/NetworkProvider.h"
 #include "../handlers/SystemHandler.h"
@@ -119,11 +120,24 @@ void DeviceController::initModules() {
         }
     }
     
-    // CAN manager disabled for testing sleep behavior
-    // if (!canManager->setup()) {
-    //     Serial.println("[DEVICE] CanManager setup failed!");
-    // }
-    // canManager->start();
+    // Setup CAN manager
+    if (!canManager->setup()) {
+        Serial.println("[DEVICE] CanManager setup failed!");
+    }
+    
+    // Create and setup VehicleManager
+    vehicleManager = new VehicleManager(canManager);
+    if (!vehicleManager->setup()) {
+        Serial.println("[DEVICE] VehicleManager setup failed!");
+    }
+    
+    // Connect CAN frame callback to VehicleManager
+    canManager->setFrameCallback([this](uint32_t canId, const uint8_t* data, uint8_t dlc, bool extended) {
+        vehicleManager->onCanFrame(canId, data, dlc, extended);
+    });
+    
+    // Now start CAN
+    canManager->start();
 
     Serial.println("[DEVICE] All modules initialized");
 }
@@ -175,6 +189,7 @@ void DeviceController::loopModules() {
     modemManager->loop();
     linkManager->loop();
     canManager->loop();
+    vehicleManager->loop();
 }
 
 void DeviceController::reportActivity() {

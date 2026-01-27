@@ -1,0 +1,435 @@
+#pragma once
+
+#include <Arduino.h>
+
+/**
+ * BroadcastDecoder - Utility functions for extracting signals from CAN frames
+ * 
+ * VW CAN signals use DBC notation:
+ *   start_bit|length@byte_order
+ *   @1 = Intel/Little-endian (LSB first) - most common in VW
+ *   @0 = Motorola/Big-endian (MSB first)
+ * 
+ * Formula: physical_value = raw_value * scale + offset
+ */
+namespace BroadcastDecoder {
+
+/**
+ * Extract a signal from CAN data (Intel/Little-endian byte order).
+ * This is the most common format in VW CAN messages.
+ * 
+ * @param data Pointer to CAN frame data (8 bytes)
+ * @param startBit Starting bit position (0-63)
+ * @param length Number of bits (1-32)
+ * @return Raw unsigned value
+ * 
+ * Example: BMS_SOC_HiRes at bits 47|11@LE
+ *   extractSignalLE(data, 47, 11) returns raw SOC value
+ *   Then multiply by 0.05 to get percentage
+ */
+inline uint32_t extractSignalLE(const uint8_t* data, uint8_t startBit, uint8_t length) {
+    uint32_t result = 0;
+    
+    for (uint8_t i = 0; i < length; i++) {
+        uint8_t bitPos = startBit + i;
+        uint8_t byteIdx = bitPos / 8;
+        uint8_t bitIdx = bitPos % 8;
+        
+        if (byteIdx < 8) {
+            if (data[byteIdx] & (1 << bitIdx)) {
+                result |= (1UL << i);
+            }
+        }
+    }
+    
+    return result;
+}
+
+/**
+ * Extract a signal from CAN data (Motorola/Big-endian byte order).
+ * Less common in VW, but some signals use this format.
+ * 
+ * @param data Pointer to CAN frame data (8 bytes)
+ * @param startBit Starting bit position (MSB position in Motorola notation)
+ * @param length Number of bits (1-32)
+ * @return Raw unsigned value
+ */
+inline uint32_t extractSignalBE(const uint8_t* data, uint8_t startBit, uint8_t length) {
+    // Motorola byte order: start bit is MSB, bits counted down across bytes
+    uint32_t result = 0;
+    
+    uint8_t byteIdx = startBit / 8;
+    uint8_t bitIdx = startBit % 8;
+    
+    for (uint8_t i = 0; i < length; i++) {
+        if (byteIdx < 8) {
+            if (data[byteIdx] & (1 << bitIdx)) {
+                result |= (1UL << (length - 1 - i));
+            }
+        }
+        
+        // Move to next bit (going right/down in Motorola order)
+        if (bitIdx == 0) {
+            bitIdx = 7;
+            byteIdx++;
+        } else {
+            bitIdx--;
+        }
+    }
+    
+    return result;
+}
+
+/**
+ * Extract a single bit from CAN data.
+ * 
+ * @param data Pointer to CAN frame data
+ * @param bitPos Bit position (0-63)
+ * @return true if bit is set
+ */
+inline bool extractBit(const uint8_t* data, uint8_t bitPos) {
+    uint8_t byteIdx = bitPos / 8;
+    uint8_t bitIdx = bitPos % 8;
+    
+    if (byteIdx >= 8) return false;
+    return (data[byteIdx] & (1 << bitIdx)) != 0;
+}
+
+/**
+ * Extract a full byte from CAN data.
+ * 
+ * @param data Pointer to CAN frame data
+ * @param byteIdx Byte index (0-7)
+ * @return Byte value
+ */
+inline uint8_t extractByte(const uint8_t* data, uint8_t byteIdx) {
+    if (byteIdx >= 8) return 0;
+    return data[byteIdx];
+}
+
+/**
+ * Extract a 16-bit word (little-endian) from CAN data.
+ * 
+ * @param data Pointer to CAN frame data
+ * @param byteIdx Starting byte index (0-6)
+ * @return 16-bit value
+ */
+inline uint16_t extractWord(const uint8_t* data, uint8_t byteIdx) {
+    if (byteIdx >= 7) return 0;
+    return data[byteIdx] | (data[byteIdx + 1] << 8);
+}
+
+/**
+ * Apply scale and offset to convert raw value to physical value.
+ * 
+ * Formula: physical = raw * scale + offset
+ */
+inline float applyScaleOffset(uint32_t raw, float scale, float offset) {
+    return (float)raw * scale + offset;
+}
+
+/**
+ * Apply scale and offset for signed values.
+ * Treats the raw value as signed based on bit length.
+ */
+inline float applyScaleOffsetSigned(uint32_t raw, uint8_t bits, float scale, float offset) {
+    // Check if sign bit is set
+    uint32_t signBit = 1UL << (bits - 1);
+    int32_t signedRaw;
+    
+    if (raw & signBit) {
+        // Negative: sign-extend
+        signedRaw = (int32_t)(raw | (~0UL << bits));
+    } else {
+        signedRaw = (int32_t)raw;
+    }
+    
+    return (float)signedRaw * scale + offset;
+}
+
+// ============================================================================
+// VW-specific signal extraction helpers
+// These match the signal definitions from the DBC files
+// ============================================================================
+
+/**
+ * BMS_01 (0x191) - Core battery data
+ */
+struct BMS01Data {
+    float current;      // BMS_IstStrom_02: A (negative = discharge)
+    float voltage;      // BMS_IstSpannung: V
+    float socHiRes;     // BMS_SOC_HiRes: %
+};
+
+inline BMS01Data decodeBMS01(const uint8_t* data) {
+    BMS01Data result;
+    
+    // BMS_IstStrom_02: bits 12|12@LE, scale=1.0, offset=-2047 A
+    uint32_t rawCurrent = extractSignalLE(data, 12, 12);
+    result.current = applyScaleOffset(rawCurrent, 1.0f, -2047.0f);
+    
+    // BMS_IstSpannung: bits 24|12@LE, scale=0.25, offset=0 V
+    uint32_t rawVoltage = extractSignalLE(data, 24, 12);
+    result.voltage = applyScaleOffset(rawVoltage, 0.25f, 0.0f);
+    
+    // BMS_SOC_HiRes: bits 47|11@LE, scale=0.05, offset=0 %
+    uint32_t rawSoc = extractSignalLE(data, 47, 11);
+    result.socHiRes = applyScaleOffset(rawSoc, 0.05f, 0.0f);
+    
+    return result;
+}
+
+/**
+ * BMS_10 (0x509) - Usable SOC and energy
+ */
+struct BMS10Data {
+    float energyWh;         // BMS_Energieinhalt_HiRes: Wh
+    float maxEnergyWh;      // BMS_MaxEnergieinhalt_HiRes: Wh
+    float usableSoc;        // BMS_NutzbarerSOC: %
+};
+
+inline BMS10Data decodeBMS10(const uint8_t* data) {
+    BMS10Data result;
+    
+    // BMS_Energieinhalt_HiRes: bits 0|15@LE, scale=4.0, offset=0 Wh
+    uint32_t rawEnergy = extractSignalLE(data, 0, 15);
+    result.energyWh = applyScaleOffset(rawEnergy, 4.0f, 0.0f);
+    
+    // BMS_MaxEnergieinhalt_HiRes: bits 15|15@LE, scale=4.0, offset=0 Wh
+    uint32_t rawMaxEnergy = extractSignalLE(data, 15, 15);
+    result.maxEnergyWh = applyScaleOffset(rawMaxEnergy, 4.0f, 0.0f);
+    
+    // BMS_NutzbarerSOC: bits 30|8@LE, scale=0.5, offset=0 %
+    uint32_t rawSoc = extractSignalLE(data, 30, 8);
+    result.usableSoc = applyScaleOffset(rawSoc, 0.5f, 0.0f);
+    
+    return result;
+}
+
+/**
+ * BMS_07 (0x5CA) - Charging status
+ */
+struct BMS07Data {
+    bool chargingActive;    // BMS_Ladevorgang_aktiv
+    bool balancingActive;   // BMS_Balancing_Aktiv
+    float energyWh;         // BMS_Energieinhalt (low-res)
+    float maxEnergyWh;      // BMS_MaxEnergieinhalt (low-res)
+};
+
+inline BMS07Data decodeBMS07(const uint8_t* data) {
+    BMS07Data result;
+    
+    // BMS_Ladevorgang_aktiv: bit 23
+    result.chargingActive = extractBit(data, 23);
+    
+    // BMS_Balancing_Aktiv: bits 30|2@LE (0=off, 1-3=active)
+    uint32_t rawBalancing = extractSignalLE(data, 30, 2);
+    result.balancingActive = (rawBalancing > 0);
+    
+    // BMS_Energieinhalt: bits 12|11@LE, scale=50, offset=0 Wh
+    uint32_t rawEnergy = extractSignalLE(data, 12, 11);
+    result.energyWh = applyScaleOffset(rawEnergy, 50.0f, 0.0f);
+    
+    // BMS_MaxEnergieinhalt: bits 32|11@LE, scale=50, offset=0 Wh
+    uint32_t rawMaxEnergy = extractSignalLE(data, 32, 11);
+    result.maxEnergyWh = applyScaleOffset(rawMaxEnergy, 50.0f, 0.0f);
+    
+    return result;
+}
+
+/**
+ * BMS_06 (0x59E) - Battery temperature
+ */
+inline float decodeBMS06Temperature(const uint8_t* data) {
+    // BMS_Temperatur: bits 16|8@LE, scale=0.5, offset=-40 C
+    uint32_t raw = extractSignalLE(data, 16, 8);
+    return applyScaleOffset(raw, 0.5f, -40.0f);
+}
+
+/**
+ * DCDC_01 (0x2AE) - DC-DC converter
+ */
+struct DCDC01Data {
+    float hvVoltage;        // DC_IstSpannung_HV: V
+    float lvVoltage;        // DC_IstSpannung_NV: V  
+    float lvCurrent;        // DC_IstStrom_NV: A
+};
+
+inline DCDC01Data decodeDCDC01(const uint8_t* data) {
+    DCDC01Data result;
+    
+    // DC_IstSpannung_HV: bits 12|12@LE, scale=0.25, offset=0 V
+    uint32_t rawHV = extractSignalLE(data, 12, 12);
+    result.hvVoltage = applyScaleOffset(rawHV, 0.25f, 0.0f);
+    
+    // DC_IstSpannung_NV: bits 56|8@LE, scale=0.1, offset=0 V
+    uint32_t rawLV = extractSignalLE(data, 56, 8);
+    result.lvVoltage = applyScaleOffset(rawLV, 0.1f, 0.0f);
+    
+    // DC_IstStrom_NV: bits 34|10@LE, scale=1.0, offset=-511 A
+    uint32_t rawCurrent = extractSignalLE(data, 34, 10);
+    result.lvCurrent = applyScaleOffset(rawCurrent, 1.0f, -511.0f);
+    
+    return result;
+}
+
+/**
+ * Klemmen_Status_01 (0x3C0) - Ignition status
+ */
+struct IgnitionData {
+    bool keyInserted;       // ZAS_Kl_S (bit 16)
+    bool ignitionOn;        // ZAS_Kl_15 (bit 17)
+    bool startRequested;    // ZAS_Kl_50 (bit 19)
+};
+
+inline IgnitionData decodeIgnition(const uint8_t* data) {
+    IgnitionData result;
+    
+    result.keyInserted = extractBit(data, 16);      // ZAS_Kl_S
+    result.ignitionOn = extractBit(data, 17);       // ZAS_Kl_15
+    result.startRequested = extractBit(data, 19);   // ZAS_Kl_50
+    
+    return result;
+}
+
+/**
+ * ESP_21 (0x0FD) - Vehicle speed
+ */
+inline float decodeSpeed(const uint8_t* data) {
+    // ESP_v_Signal: bits 32|16@LE, scale=0.01, offset=0 km/h
+    uint32_t raw = extractSignalLE(data, 32, 16);
+    return applyScaleOffset(raw, 0.01f, 0.0f);
+}
+
+/**
+ * Diagnose_01 (0x6B2) - Odometer and time
+ */
+struct DiagnoseData {
+    uint32_t odometerKm;    // KBI_Kilometerstand (20 bits)
+    uint16_t year;          // UH_Jahr
+    uint8_t month;          // UH_Monat
+    uint8_t day;            // UH_Tag
+    uint8_t hour;           // UH_Stunde
+    uint8_t minute;         // UH_Minute
+    uint8_t second;         // UH_Sekunde
+};
+
+inline DiagnoseData decodeDiagnose(const uint8_t* data) {
+    DiagnoseData result;
+    
+    // KBI_Kilometerstand: bits 8|20@LE
+    result.odometerKm = extractSignalLE(data, 8, 20);
+    
+    // UH_Jahr: bits 28|7@LE, offset=2000
+    result.year = extractSignalLE(data, 28, 7) + 2000;
+    
+    // UH_Monat: bits 35|4@LE
+    result.month = extractSignalLE(data, 35, 4);
+    
+    // UH_Tag: bits 39|5@LE
+    result.day = extractSignalLE(data, 39, 5);
+    
+    // UH_Stunde: bits 44|5@LE
+    result.hour = extractSignalLE(data, 44, 5);
+    
+    // UH_Minute: bits 49|6@LE
+    result.minute = extractSignalLE(data, 49, 6);
+    
+    // UH_Sekunde: bits 55|6@LE
+    result.second = extractSignalLE(data, 55, 6);
+    
+    return result;
+}
+
+/**
+ * TSG_FT_01 (0x3D0) - Driver door module
+ */
+struct DoorModuleData {
+    bool doorOpen;          // Tuer_geoeffnet (bit 0)
+    bool doorLocked;        // verriegelt (bit 1)
+    uint8_t windowPos;      // FH_Oeffnung (byte 3, 0-200 = 0-100%)
+};
+
+inline DoorModuleData decodeDriverDoor(const uint8_t* data) {
+    DoorModuleData result;
+    
+    result.doorOpen = extractBit(data, 0);
+    result.doorLocked = extractBit(data, 1);
+    result.windowPos = extractByte(data, 3);  // Window position in byte 3
+    
+    return result;
+}
+
+/**
+ * TSG_BT_01 (0x3D1) - Passenger door module
+ */
+inline DoorModuleData decodePassengerDoor(const uint8_t* data) {
+    DoorModuleData result;
+    
+    result.doorOpen = extractBit(data, 0);
+    result.doorLocked = extractBit(data, 1);
+    result.windowPos = extractByte(data, 3);
+    
+    return result;
+}
+
+/**
+ * ZV_02 (0x583) - Central locking status
+ * 
+ * Note: The exact mapping differs from DBC. Based on observed traces:
+ * - Locked: byte 2 = 0x0A or 0x08, byte 7 = 0x80
+ * - Unlocked: byte 2 = 0x80, byte 7 = 0x40
+ */
+struct LockStatusData {
+    uint8_t byte2;          // Lock state byte
+    uint8_t byte7;          // Additional lock state
+    bool isLocked;          // Interpreted lock state
+};
+
+inline LockStatusData decodeLockStatus(const uint8_t* data) {
+    LockStatusData result;
+    
+    result.byte2 = extractByte(data, 2);
+    result.byte7 = extractByte(data, 7);
+    
+    // Interpret based on observed patterns
+    // Locked: byte2 low nibble is 0x0A/0x08, byte7 = 0x80
+    // Unlocked: byte2 = 0x80, byte7 = 0x40
+    if ((result.byte2 & 0x0F) == 0x0A || (result.byte2 & 0x0F) == 0x08) {
+        result.isLocked = true;
+    } else if (result.byte2 == 0x80 && result.byte7 == 0x40) {
+        result.isLocked = false;
+    } else {
+        // Unknown state - keep previous (default to locked for safety)
+        result.isLocked = (result.byte7 == 0x80);
+    }
+    
+    return result;
+}
+
+/**
+ * Klima_03 (0x66E) - Climate status
+ */
+struct KlimaData {
+    float insideTemp;           // KL_Innen_Temp: C
+    bool standbyHeatingActive;  // KL_STH_aktiv
+    bool standbyVentActive;     // KL_STL_aktiv
+};
+
+inline KlimaData decodeKlima03(const uint8_t* data) {
+    KlimaData result;
+    
+    // KL_Innen_Temp: bits 32|8@LE, scale=0.5, offset=-50 C
+    uint32_t rawTemp = extractSignalLE(data, 32, 8);
+    result.insideTemp = applyScaleOffset(rawTemp, 0.5f, -50.0f);
+    
+    // KL_STL_aktiv: bit 0
+    result.standbyVentActive = extractBit(data, 0);
+    
+    // KL_STH_aktiv: bit 1  
+    result.standbyHeatingActive = extractBit(data, 1);
+    
+    return result;
+}
+
+} // namespace BroadcastDecoder
