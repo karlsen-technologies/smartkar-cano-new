@@ -41,6 +41,9 @@ public:
     
     /**
      * Process an incoming CAN frame (from RX channel)
+     * @param canId CAN identifier
+     * @param data Frame data
+     * @param dlc Data length code
      * Returns true if frame was processed
      */
     bool processFrame(uint32_t canId, const uint8_t* data, uint8_t dlc);

@@ -419,11 +419,6 @@ public:
     volatile uint32_t staleReplacements = 0;    // Stale pending entries replaced by new starts
     volatile uint8_t maxPendingCount = 0;       // High water mark for pending count
     
-    // Debug: capture state of first incomplete message for analysis
-    volatile uint8_t dbgFirstIncompleteIdx = 0xFF;      // Index of first incomplete (0xFF = none)
-    volatile uint8_t dbgFirstIncompleteExpected = 0;    // Expected length
-    volatile uint8_t dbgFirstIncompleteAssembled = 0;   // Assembled length
-    
 private:
     // Pending incomplete long message
     struct PendingMessage {

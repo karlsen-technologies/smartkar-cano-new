@@ -296,9 +296,6 @@ uint8_t buildChargeStop(uint8_t* dest) {
 // BAP Frame Assembler Implementation (Backward Search Approach)
 // =============================================================================
 
-// TEMPORARY DEBUG FLAG - set to 1 to enable serial debug output
-#define BAP_DEBUG_ASSEMBLER 0
-
 bool BapFrameAssembler::processFrame(const uint8_t* data, uint8_t dlc, BapMessage& outMsg) {
     if (dlc < 2) {
         return false;
@@ -327,22 +324,14 @@ bool BapFrameAssembler::processFrame(const uint8_t* data, uint8_t dlc, BapMessag
         // Long message START frame
         longStartFrames++;
         
-        // Total length in header includes 2-byte BAP header, so payload = total - 2
-        uint8_t payloadLength = (header.totalLength > 2) ? (header.totalLength - 2) : 0;
-        
-#if BAP_DEBUG_ASSEMBLER
-        Serial.printf("[BAP] START group=%d totalLen=%d payloadLen=%d func=0x%02X pending=%d\r\n",
-            header.group, header.totalLength, payloadLength, header.functionId, pendingCount);
-#endif
+        // totalLength (byte 1) is the payload length directly (does NOT include BAP header)
+        uint8_t payloadLength = header.totalLength;
         
         // Add new pending message
         int8_t idx = addPendingMessage(header.group, header.opcode, 
                                         header.deviceId, header.functionId, payloadLength);
         if (idx < 0) {
             pendingOverflows++;
-#if BAP_DEBUG_ASSEMBLER
-            Serial.printf("[BAP] OVERFLOW! Could not add pending message\r\n");
-#endif
             return false;  // No room for more pending messages
         }
         
@@ -355,11 +344,6 @@ bool BapFrameAssembler::processFrame(const uint8_t* data, uint8_t dlc, BapMessag
             pm.assembledLength += firstChunkLen;
         }
         
-#if BAP_DEBUG_ASSEMBLER
-        Serial.printf("[BAP]   -> added at slot %d, assembled=%d/%d\r\n", 
-            idx, pm.assembledLength, pm.expectedLength);
-#endif
-        
         // Check if message is complete (small long message that fits in start frame)
         if (pm.assembledLength >= pm.expectedLength) {
             outMsg.opcode = pm.opcode;
@@ -367,10 +351,6 @@ bool BapFrameAssembler::processFrame(const uint8_t* data, uint8_t dlc, BapMessag
             outMsg.functionId = pm.functionId;
             outMsg.payloadLen = pm.expectedLength;
             memcpy(outMsg.payload, pm.buffer, pm.expectedLength);
-            
-#if BAP_DEBUG_ASSEMBLER
-            Serial.printf("[BAP]   -> COMPLETE in start frame!\r\n");
-#endif
             
             removePendingMessage(idx);
             longMessagesDecoded++;
@@ -383,24 +363,10 @@ bool BapFrameAssembler::processFrame(const uint8_t* data, uint8_t dlc, BapMessag
         // Long message CONTINUATION frame
         longContFrames++;
         
-#if BAP_DEBUG_ASSEMBLER
-        Serial.printf("[BAP] CONT group=%d index=%d dlc=%d\r\n", header.group, header.index, dlc);
-#endif
-        
         // Search for pending message matching group and expecting this index
         int8_t idx = findPendingMessage(header.group, header.index);
         if (idx < 0) {
             continuationErrors++;
-#if BAP_DEBUG_ASSEMBLER
-            Serial.printf("[BAP]   -> ERROR: no matching start! group=%d index=%d pendingCount=%d\r\n", 
-                header.group, header.index, pendingCount);
-            // Dump pending entries for debugging
-            for (uint8_t i = 0; i < pendingCount; i++) {
-                Serial.printf("[BAP]      slot %d: group=%d nextIdx=%d assembled=%d/%d\r\n",
-                    i, pending[i].group, pending[i].nextExpectedIndex, 
-                    pending[i].assembledLength, pending[i].expectedLength);
-            }
-#endif
             return false;  // No matching start frame found
         }
         
@@ -423,11 +389,6 @@ bool BapFrameAssembler::processFrame(const uint8_t* data, uint8_t dlc, BapMessag
         // Increment expected index for next continuation (wraps at 16)
         pm.nextExpectedIndex = (pm.nextExpectedIndex + 1) & 0x0F;
         
-#if BAP_DEBUG_ASSEMBLER
-        Serial.printf("[BAP]   -> slot %d: assembled=%d/%d nextIdx=%d\r\n", 
-            idx, pm.assembledLength, pm.expectedLength, pm.nextExpectedIndex);
-#endif
-        
         // Check if message is complete
         if (pm.assembledLength >= pm.expectedLength) {
             outMsg.opcode = pm.opcode;
@@ -435,10 +396,6 @@ bool BapFrameAssembler::processFrame(const uint8_t* data, uint8_t dlc, BapMessag
             outMsg.functionId = pm.functionId;
             outMsg.payloadLen = pm.expectedLength;
             memcpy(outMsg.payload, pm.buffer, pm.expectedLength);
-            
-#if BAP_DEBUG_ASSEMBLER
-            Serial.printf("[BAP]   -> COMPLETE! func=0x%02X\r\n", pm.functionId);
-#endif
             
             removePendingMessage(idx);
             longMessagesDecoded++;
@@ -450,9 +407,9 @@ bool BapFrameAssembler::processFrame(const uint8_t* data, uint8_t dlc, BapMessag
 }
 
 int8_t BapFrameAssembler::findPendingMessage(uint8_t group, uint8_t index) {
-    // Search backwards through pending messages to find one matching group
+    // Search backwards through ALL slots to find one matching group
     // and expecting this specific continuation index
-    for (int8_t i = pendingCount - 1; i >= 0; i--) {
+    for (int8_t i = MAX_PENDING_MESSAGES - 1; i >= 0; i--) {
         if (pending[i].active && 
             pending[i].group == group &&
             pending[i].nextExpectedIndex == index &&
@@ -466,14 +423,19 @@ int8_t BapFrameAssembler::findPendingMessage(uint8_t group, uint8_t index) {
 int8_t BapFrameAssembler::addPendingMessage(uint8_t group, uint8_t opcode,
                                              uint8_t deviceId, uint8_t functionId,
                                              uint8_t expectedLength) {
-    // Always add a new entry - don't replace existing ones
-    // Multiple messages can use different groups concurrently
-    
-    if (pendingCount >= MAX_PENDING_MESSAGES) {
-        return -1;  // Full
+    // Find first inactive slot (reuse freed slots)
+    int8_t idx = -1;
+    for (uint8_t i = 0; i < MAX_PENDING_MESSAGES; i++) {
+        if (!pending[i].active) {
+            idx = i;
+            break;
+        }
     }
     
-    uint8_t idx = pendingCount;
+    if (idx < 0) {
+        return -1;  // All slots full
+    }
+    
     pending[idx].active = true;
     pending[idx].group = group;
     pending[idx].nextExpectedIndex = 0;  // First continuation has index 0
@@ -483,7 +445,13 @@ int8_t BapFrameAssembler::addPendingMessage(uint8_t group, uint8_t opcode,
     pending[idx].expectedLength = expectedLength;
     pending[idx].assembledLength = 0;
     
-    pendingCount++;
+    // Count active entries
+    pendingCount = 0;
+    for (uint8_t i = 0; i < MAX_PENDING_MESSAGES; i++) {
+        if (pending[i].active) {
+            pendingCount++;
+        }
+    }
     
     // Track high water mark
     if (pendingCount > maxPendingCount) {
@@ -498,17 +466,15 @@ void BapFrameAssembler::removePendingMessage(uint8_t index) {
         return;
     }
     
-    // Just mark as inactive - don't shift entries!
-    // Shifting causes indices to change, breaking the backward search logic
+    // Just mark as inactive - slot can be reused by addPendingMessage
     pending[index].active = false;
     pending[index].assembledLength = 0;
     
-    // Recalculate pendingCount as the highest active index + 1
-    // This allows reuse of inactive slots
+    // Count actual active entries
     pendingCount = 0;
     for (uint8_t i = 0; i < MAX_PENDING_MESSAGES; i++) {
         if (pending[i].active) {
-            pendingCount = i + 1;
+            pendingCount++;
         }
     }
 }
