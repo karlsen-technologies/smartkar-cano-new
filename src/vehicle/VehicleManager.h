@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include "VehicleState.h"
 #include "domains/BodyDomain.h"
 #include "domains/BatteryDomain.h"
@@ -11,6 +13,7 @@
 #include "bap/BapChannelRouter.h"
 #include "bap/channels/BatteryControlChannel.h"
 #include "ChargingProfileManager.h"
+#include "../core/IModule.h"  // For ActivityCallback
 
 // Enable this to track unique CAN IDs seen (adds overhead to CAN task)
 // #define DEBUG_CAN_IDS  // DISABLED - no longer needed

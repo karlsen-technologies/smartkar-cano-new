@@ -55,11 +55,12 @@ void VehicleManager::loop()
     batteryControlChannel.loop();
     
     // Periodic statistics logging (from main loop on Core 1)
-    if (millis() - lastLogTime > LOG_INTERVAL)
-    {
-        logStatistics();
-        lastLogTime = millis();
-    }
+    // DISABLED - reduces serial output noise
+    // if (millis() - lastLogTime > LOG_INTERVAL)
+    // {
+    //     logStatistics();
+    //     lastLogTime = millis();
+    // }
 }
 
 // =============================================================================

@@ -195,7 +195,7 @@ void CanManager::canTaskLoop() {
                 );
             }
             
-            // Report activity
+            // Report activity (for sleep management)
             if (activityCallback) {
                 activityCallback();
             }

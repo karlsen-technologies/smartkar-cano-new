@@ -18,7 +18,7 @@
 #include "esp_system.h"
 
 // Default configuration
-#define DEFAULT_ACTIVITY_TIMEOUT    300000  // 5 minutes
+#define DEFAULT_ACTIVITY_TIMEOUT    60000   // 1 minute (for testing)
 #define DEFAULT_MIN_AWAKE_TIME      10000   // 10 seconds
 
 // PMU retry configuration
@@ -78,7 +78,7 @@ void DeviceController::initModules() {
     powerManager->setActivityCallback(activityCb);
     modemManager->setActivityCallback(activityCb);
     linkManager->setActivityCallback(activityCb);
-    canManager->setActivityCallback(activityCb);
+    canManager->setActivityCallback(activityCb);  // Re-enabled - we check vehicle state separately now
     
     // Set low battery callback
     powerManager->setLowBatteryCallback(&DeviceController::lowBatteryCallbackWrapper);
@@ -235,11 +235,21 @@ bool DeviceController::canSleep() {
 
     // Must be awake for minimum time (unless sleep was explicitly requested)
     if (!sleepRequested && (now - bootTime) < config.minAwakeTime) {
+        Serial.printf("[DEVICE] Cannot sleep: boot time %lums ago (need %lums)\r\n",
+                     now - bootTime, config.minAwakeTime);
         return false;
     }
 
-    // Check activity timeout (skip if sleep was explicitly requested)
+    // If vehicle CAN bus is active, stay awake (skip if sleep was explicitly requested)
+    if (!sleepRequested && vehicleManager && vehicleManager->isVehicleAwake()) {
+        Serial.println("[DEVICE] Cannot sleep: Vehicle CAN bus is active");
+        return false;
+    }
+
+    // Check activity timeout for non-vehicle activity (skip if sleep was explicitly requested)
     if (!sleepRequested && (now - lastActivityTime) < config.activityTimeout) {
+        Serial.printf("[DEVICE] Cannot sleep: activity %lums ago (need %lums)\r\n",
+                     now - lastActivityTime, config.activityTimeout);
         return false;
     }
 
@@ -264,6 +274,7 @@ bool DeviceController::canSleep() {
         return false;
     }
 
+    Serial.println("[DEVICE] Sleep conditions met, can sleep");
     return true;
 }
 
