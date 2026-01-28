@@ -53,7 +53,7 @@ public:
     // =========================================================================
     
     // From BMS_07 (0x5CA)
-    bool isCharging() const { return vehicleState.battery.chargingActive; }
+    bool isCharging() const { return vehicleState.battery.charging; }
     bool isBalancing() const { return vehicleState.battery.balancingActive; }
     float energyWh() const { return vehicleState.battery.energyWh; }
     float maxEnergyWh() const { return vehicleState.battery.maxEnergyWh; }

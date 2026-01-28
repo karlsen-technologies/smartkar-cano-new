@@ -37,10 +37,19 @@ void ClimateDomain::processKlima03(const uint8_t* data) {
     
     ClimateState& climate = vehicleState.climate;
     
-    climate.insideTemp = decoded.insideTemp;
+    // Update inside temperature (CAN source - only if BAP hasn't updated it recently)
+    // BAP takes priority when climate is actively controlled
+    if (climate.insideTempSource != DataSource::BAP || 
+        (millis() - climate.insideTempUpdate) > 5000) {
+        climate.insideTemp = decoded.insideTemp;
+        climate.insideTempSource = DataSource::CAN_STD;
+        climate.insideTempUpdate = millis();
+    }
+    
+    // Update standby modes (CAN only - not controlled via BAP)
     climate.standbyHeatingActive = decoded.standbyHeatingActive;
     climate.standbyVentActive = decoded.standbyVentActive;
-    climate.klimaUpdate = millis();
+    climate.standbyUpdate = millis();
     
     // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }

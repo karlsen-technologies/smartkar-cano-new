@@ -43,11 +43,16 @@ void BatteryDomain::processBMS07(const uint8_t* data) {
     
     BatteryState& battery = vehicleState.battery;
     
-    battery.chargingActive = decoded.chargingActive;
+    // Update unified charging field (CAN source)
+    battery.charging = decoded.chargingActive;
+    battery.chargingSource = DataSource::CAN_STD;
+    battery.chargingUpdate = millis();
+    
     battery.balancingActive = decoded.balancingActive;
     battery.energyWh = decoded.energyWh;
     battery.maxEnergyWh = decoded.maxEnergyWh;
-    battery.bms07Update = millis();
+    battery.energyUpdate = millis();
+    battery.balancingUpdate = millis();
     
     // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }

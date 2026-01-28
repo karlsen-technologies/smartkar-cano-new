@@ -12,20 +12,41 @@ void VehicleProvider::getTelemetry(JsonObject& data) {
     // Get a consistent copy of vehicle state
     VehicleState state = vehicleManager->getStateCopy();
     
-    // === Battery state ===
+    // === Battery state (unified) ===
     JsonObject battery = data["battery"].to<JsonObject>();
-    battery["soc"] = state.battery.usableSoc;
-    battery["socHiRes"] = state.battery.socHiRes;
-    battery["voltage"] = state.battery.voltage;
-    battery["current"] = state.battery.current;
+    
+    // SOC (BAP primary, includes source tracking)
+    if (state.battery.hasSoc()) {
+        battery["soc"] = state.battery.soc;
+        battery["socSource"] = state.battery.socSource == DataSource::BAP ? "bap" : "can";
+    }
+    
+    // Charging status (unified from CAN + BAP)
+    battery["charging"] = state.battery.charging;
+    battery["chargingSource"] = state.battery.chargingSource == DataSource::BAP ? "bap" : 
+                                 state.battery.chargingSource == DataSource::CAN_STD ? "can" : "none";
+    
+    // Charging details (from BAP when available)
+    if (state.battery.chargingDetailsUpdate > 0) {
+        battery["chargingMode"] = static_cast<uint8_t>(state.battery.chargingMode);
+        battery["chargingStatus"] = static_cast<uint8_t>(state.battery.chargingStatus);
+        battery["chargingAmps"] = state.battery.chargingAmps;
+        battery["targetSoc"] = state.battery.targetSoc;
+        battery["remainingMin"] = state.battery.remainingTimeMin;
+    }
+    
+    // Power and energy (CAN)
     battery["powerKw"] = state.battery.powerKw;
     battery["energyWh"] = state.battery.energyWh;
     battery["maxEnergyWh"] = state.battery.maxEnergyWh;
     battery["temperature"] = state.battery.temperature;
-    battery["charging"] = state.battery.chargingActive;
     battery["balancing"] = state.battery.balancingActive;
-    battery["dcdc12v"] = state.battery.dcdc12v;
-    battery["dcdcCurrent"] = state.battery.dcdcCurrent;
+    
+    // Voltage/current (NOT AVAILABLE on comfort CAN)
+    if (state.battery.voltageUpdate > 0) {
+        battery["voltage"] = state.battery.voltage;
+        battery["current"] = state.battery.current;
+    }
     
     // === Drive state ===
     JsonObject drive = data["drive"].to<JsonObject>();
@@ -72,43 +93,33 @@ void VehicleProvider::getTelemetry(JsonObject& data) {
         gps["hdop"] = state.gps.hdop;
     }
     
-    // === Climate state ===
+    // === Climate state (unified) ===
     JsonObject climate = data["climate"].to<JsonObject>();
+    
+    // Temperature (with source tracking)
     climate["insideTemp"] = state.climate.insideTemp;
+    climate["insideTempSource"] = state.climate.insideTempSource == DataSource::BAP ? "bap" : "can";
     climate["outsideTemp"] = state.climate.outsideTemp;
+    
+    // Standby modes (CAN only)
     climate["standbyHeating"] = state.climate.standbyHeatingActive;
     climate["standbyVent"] = state.climate.standbyVentActive;
     
-    // === BAP states ===
-    // Plug state
-    if (state.bapPlug.isValid()) {
+    // Active climate control (BAP)
+    climate["active"] = state.climate.climateActive;
+    climate["heating"] = state.climate.heating;
+    climate["cooling"] = state.climate.cooling;
+    climate["ventilation"] = state.climate.ventilation;
+    climate["autoDefrost"] = state.climate.autoDefrost;
+    climate["remainingMin"] = state.climate.climateTimeMin;
+    
+    // === Plug state (BAP only) ===
+    if (state.plug.isValid()) {
         JsonObject plug = data["plug"].to<JsonObject>();
-        plug["plugged"] = state.bapPlug.isPlugged();
-        plug["hasSupply"] = state.bapPlug.hasSupply();
-        plug["state"] = state.bapPlug.plugStateStr();
-    }
-    
-    // Charge state from BAP
-    if (state.bapCharge.isValid()) {
-        JsonObject bapCharge = data["bapCharge"].to<JsonObject>();
-        bapCharge["mode"] = state.bapCharge.chargeModeStr();
-        bapCharge["status"] = state.bapCharge.chargeStatusStr();
-        bapCharge["soc"] = state.bapCharge.socPercent;
-        bapCharge["remainingMin"] = state.bapCharge.remainingTimeMin;
-        bapCharge["targetSoc"] = state.bapCharge.targetSoc;
-        bapCharge["amps"] = state.bapCharge.chargingAmps;
-    }
-    
-    // Climate state from BAP
-    if (state.bapClimate.isValid()) {
-        JsonObject bapClimate = data["bapClimate"].to<JsonObject>();
-        bapClimate["active"] = state.bapClimate.climateActive;
-        bapClimate["heating"] = state.bapClimate.heating;
-        bapClimate["cooling"] = state.bapClimate.cooling;
-        bapClimate["ventilation"] = state.bapClimate.ventilation;
-        bapClimate["autoDefrost"] = state.bapClimate.autoDefrost;
-        bapClimate["currentTemp"] = state.bapClimate.currentTempC;
-        bapClimate["remainingMin"] = state.bapClimate.climateTimeMin;
+        plug["plugged"] = state.plug.isPlugged();
+        plug["hasSupply"] = state.plug.hasSupply();
+        plug["state"] = state.plug.plugStateStr();
+        plug["lockState"] = state.plug.lockState;
     }
     
     // === Meta ===
@@ -125,10 +136,10 @@ TelemetryPriority VehicleProvider::getPriority() {
     if (state.drive.ignitionOn != lastIgnitionOn) {
         return TelemetryPriority::PRIORITY_HIGH;
     }
-    if (state.battery.chargingActive != lastCharging) {
+    if (state.battery.charging != lastCharging) {
         return TelemetryPriority::PRIORITY_HIGH;
     }
-    if (state.bapPlug.isPlugged() != lastPlugged) {
+    if (state.plug.isPlugged() != lastPlugged) {
         return TelemetryPriority::PRIORITY_HIGH;
     }
     
@@ -167,7 +178,7 @@ bool VehicleProvider::hasChanged() {
     }
     
     // Charging state changed
-    if (state.battery.chargingActive != lastCharging) {
+    if (state.battery.charging != lastCharging) {
         return true;
     }
     
@@ -177,12 +188,12 @@ bool VehicleProvider::hasChanged() {
     }
     
     // Plug state changed
-    if (state.bapPlug.isPlugged() != lastPlugged) {
+    if (state.plug.isPlugged() != lastPlugged) {
         return true;
     }
     
-    // SOC changed significantly
-    float socDiff = abs(state.battery.usableSoc - lastSoc);
+    // SOC changed significantly (use unified soc field)
+    float socDiff = abs(state.battery.soc - lastSoc);
     if (socDiff >= SOC_CHANGE_THRESHOLD) {
         return true;
     }
@@ -210,12 +221,12 @@ void VehicleProvider::onTelemetrySent() {
     // Update last reported values
     if (vehicleManager) {
         VehicleState state = vehicleManager->getStateCopy();
-        lastSoc = state.battery.usableSoc;
+        lastSoc = state.battery.soc;
         lastPowerKw = state.battery.powerKw;
         lastIgnitionOn = state.drive.ignitionOn;
-        lastCharging = state.battery.chargingActive;
+        lastCharging = state.battery.charging;
         lastLocked = state.body.isLocked();
-        lastPlugged = state.bapPlug.isPlugged();
+        lastPlugged = state.plug.isPlugged();
         lastSpeedKmh = state.drive.speedKmh;
     }
 }
@@ -245,9 +256,9 @@ void VehicleProvider::checkAndEmitEvents() {
     // Initialize event tracking on first run (don't emit events for initial state)
     if (!eventsInitialized) {
         eventIgnitionOn = state.drive.ignitionOn;
-        eventCharging = state.battery.chargingActive;
+        eventCharging = state.battery.charging;
         eventLocked = state.body.isLocked();
-        eventPlugged = state.bapPlug.isPlugged();
+        eventPlugged = state.plug.isPlugged();
         eventsInitialized = true;
         return;
     }
@@ -264,12 +275,12 @@ void VehicleProvider::checkAndEmitEvents() {
         }
     }
     
-    // Check charging change
-    if (state.battery.chargingActive != eventCharging) {
-        eventCharging = state.battery.chargingActive;
+    // Check charging change (unified field)
+    if (state.battery.charging != eventCharging) {
+        eventCharging = state.battery.charging;
         JsonDocument doc;
         JsonObject details = doc.to<JsonObject>();
-        details["soc"] = state.battery.usableSoc;
+        details["soc"] = state.battery.soc;
         details["powerKw"] = state.battery.powerKw;
         
         if (eventCharging) {
@@ -294,11 +305,11 @@ void VehicleProvider::checkAndEmitEvents() {
     }
     
     // Check plug change
-    if (state.bapPlug.isPlugged() != eventPlugged) {
-        eventPlugged = state.bapPlug.isPlugged();
+    if (state.plug.isPlugged() != eventPlugged) {
+        eventPlugged = state.plug.isPlugged();
         JsonDocument doc;
         JsonObject details = doc.to<JsonObject>();
-        details["hasSupply"] = state.bapPlug.hasSupply();
+        details["hasSupply"] = state.plug.hasSupply();
         
         if (eventPlugged) {
             Serial.println("[VEHICLE] Event: plugged");

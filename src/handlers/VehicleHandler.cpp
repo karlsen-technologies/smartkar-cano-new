@@ -131,7 +131,7 @@ CommandResult VehicleHandler::handleStartCharging(CommandContext& ctx) {
     
     // Check if vehicle is plugged in first
     VehicleState state = vehicleManager->getStateCopy();
-    if (!state.bapPlug.isPlugged()) {
+    if (!state.plug.isPlugged()) {
         return CommandResult::error("Vehicle is not plugged in");
     }
     
@@ -222,14 +222,25 @@ CommandResult VehicleHandler::handleGetState(CommandContext& ctx) {
     
     CommandResult result = CommandResult::ok();
     
-    // Battery state
+    // Battery state (unified)
     JsonObject battery = result.data["battery"].to<JsonObject>();
-    battery["soc"] = state.battery.usableSoc;
+    battery["soc"] = state.battery.soc;
+    battery["socSource"] = state.battery.socSource == DataSource::BAP ? "bap" : "can";
     battery["voltage"] = state.battery.voltage;
     battery["current"] = state.battery.current;
     battery["powerKw"] = state.battery.powerKw;
     battery["temperature"] = state.battery.temperature;
-    battery["charging"] = state.battery.chargingActive;
+    battery["charging"] = state.battery.charging;
+    battery["chargingSource"] = state.battery.chargingSource == DataSource::BAP ? "bap" : "can";
+    
+    // Charging details (from BAP)
+    if (state.battery.chargingDetailsUpdate > 0) {
+        battery["chargingMode"] = state.battery.chargingMode;
+        battery["chargingStatus"] = state.battery.chargingStatus;
+        battery["chargingAmps"] = state.battery.chargingAmps;
+        battery["targetSoc"] = state.battery.targetSoc;
+        battery["remainingMin"] = state.battery.remainingTimeMin;
+    }
     
     // Drive state
     JsonObject drive = result.data["drive"].to<JsonObject>();
@@ -244,30 +255,22 @@ CommandResult VehicleHandler::handleGetState(CommandContext& ctx) {
     body["trunkOpen"] = state.body.trunkOpen;
     
     // Plug state (BAP)
-    if (state.bapPlug.isValid()) {
+    if (state.plug.isValid()) {
         JsonObject plug = result.data["plug"].to<JsonObject>();
-        plug["plugged"] = state.bapPlug.isPlugged();
-        plug["hasSupply"] = state.bapPlug.hasSupply();
-        plug["state"] = state.bapPlug.plugStateStr();
+        plug["plugged"] = state.plug.isPlugged();
+        plug["hasSupply"] = state.plug.hasSupply();
+        plug["state"] = state.plug.plugStateStr();
     }
     
-    // Charge state (BAP)
-    if (state.bapCharge.isValid()) {
-        JsonObject charge = result.data["charge"].to<JsonObject>();
-        charge["mode"] = state.bapCharge.chargeModeStr();
-        charge["status"] = state.bapCharge.chargeStatusStr();
-        charge["soc"] = state.bapCharge.socPercent;
-        charge["remainingMin"] = state.bapCharge.remainingTimeMin;
-    }
-    
-    // Climate state (BAP)
-    if (state.bapClimate.isValid()) {
-        JsonObject climate = result.data["climate"].to<JsonObject>();
-        climate["active"] = state.bapClimate.climateActive;
-        climate["heating"] = state.bapClimate.heating;
-        climate["cooling"] = state.bapClimate.cooling;
-        climate["currentTemp"] = state.bapClimate.currentTempC;
-    }
+    // Climate state (unified)
+    JsonObject climate = result.data["climate"].to<JsonObject>();
+    climate["insideTemp"] = state.climate.insideTemp;
+    climate["outsideTemp"] = state.climate.outsideTemp;
+    climate["active"] = state.climate.climateActive;
+    climate["heating"] = state.climate.heating;
+    climate["cooling"] = state.climate.cooling;
+    climate["standbyHeating"] = state.climate.standbyHeatingActive;
+    climate["standbyVent"] = state.climate.standbyVentActive;
     
     // Meta info
     result.data["vehicleAwake"] = state.isAwake();

@@ -5,9 +5,22 @@
 /**
  * VehicleState - Centralized state for all decoded vehicle data
  * 
- * Each domain updates its portion of this state from CAN messages.
- * All values include a timestamp for staleness detection.
+ * Unified state with automatic data source prioritization:
+ * - BAP (extended CAN) takes precedence over standard CAN for duplicates
+ * - Thread-safe access via mutex in VehicleManager
+ * - All values include timestamps for staleness detection
+ * - Source tracking for debugging and telemetry
  */
+
+/**
+ * Data source enumeration - tracks where data originated
+ */
+enum class DataSource : uint8_t {
+    NONE = 0,       // No data received yet
+    CAN_STD = 1,    // Standard 11-bit CAN
+    BAP = 2,        // BAP extended CAN (29-bit)
+    COMPUTED = 3    // Derived/calculated value
+};
 
 /**
  * Lock state enumeration
@@ -120,61 +133,134 @@ struct DriveState {
 };
 
 /**
+ * BAP Charge Mode enumeration (from BAP function 0x11)
+ */
+enum class BapChargeMode : uint8_t {
+    OFF = 0x0,
+    AC = 0x1,
+    DC = 0x2,
+    CONDITIONING = 0x3,
+    AC_AND_CONDITIONING = 0x4,
+    DC_AND_CONDITIONING = 0x5,
+    INIT = 0xF
+};
+
+/**
+ * BAP Charge Status enumeration (from BAP function 0x11)
+ */
+enum class BapChargeStatus : uint8_t {
+    INIT = 0x0,
+    IDLE = 0x1,
+    RUNNING = 0x2,
+    CONSERVATION = 0x3,
+    ABORTED_TEMP_LOW = 0x4,
+    ABORTED_DEVICE_ERROR = 0x5,
+    ABORTED_NO_POWER = 0x6,
+    ABORTED_NOT_IN_PARK = 0x7,
+    COMPLETED = 0x8,
+    NO_ERROR = 0x9
+};
+
+/**
  * Battery domain state - SOC, voltage, current, charging
+ * Consolidates data from CAN (BMS) and BAP (Battery Control)
  */
 struct BatteryState {
-    // From 0x191 (BMS_01)
-    float voltage = 0.0f;           // HV battery voltage (V)
-    float current = 0.0f;           // Battery current (A, negative = discharge)
-    float socHiRes = 0.0f;          // High-res SOC (%)
-    unsigned long bms01Update = 0;
+    // === Primary SOC (BAP priority, CAN fallback) ===
+    float soc = 0.0f;                   // State of charge 0-100% (unified field)
+    DataSource socSource = DataSource::NONE;
+    unsigned long socUpdate = 0;
     
-    // From 0x509 (BMS_10)
-    float usableSoc = 0.0f;         // Usable/display SOC (%)
-    float energyWh = 0.0f;          // Current energy content (Wh)
-    float maxEnergyWh = 0.0f;       // Max energy content (Wh)
-    unsigned long bms10Update = 0;
+    // === Charging Status (unified) ===
+    bool charging = false;              // Is vehicle currently charging?
+    DataSource chargingSource = DataSource::NONE;
+    unsigned long chargingUpdate = 0;
     
-    // From 0x5CA (BMS_07)
-    bool chargingActive = false;    // Charge session active
-    bool balancingActive = false;   // Cell balancing in progress
-    unsigned long bms07Update = 0;
+    // Detailed charging info (from BAP when available) - populated later after enums defined
+    uint8_t chargingMode = 0x0F;        // BapChargeMode (init=0x0F)
+    uint8_t chargingStatus = 0x00;      // BapChargeStatus (init=0x00)
+    uint8_t chargingAmps = 0;           // Current draw (A)
+    uint8_t targetSoc = 0;              // Target SOC (%)
+    uint8_t remainingTimeMin = 0;       // Minutes to target
+    unsigned long chargingDetailsUpdate = 0;
     
-    // From 0x59E (BMS_06)
-    float temperature = 0.0f;       // Battery temp (C)
+    // === Battery Core (CAN only - not on comfort CAN, placeholders) ===
+    float voltage = 0.0f;               // HV battery voltage (V) - NOT AVAILABLE
+    float current = 0.0f;               // Battery current (A) - NOT AVAILABLE
+    unsigned long voltageUpdate = 0;
+    
+    // === Energy (CAN BMS_07 0x5CA) ===
+    float energyWh = 0.0f;              // Current energy content (Wh)
+    float maxEnergyWh = 0.0f;           // Max energy content (Wh)
+    unsigned long energyUpdate = 0;
+    
+    // === Temperature (CAN BMS_06 0x59E) ===
+    float temperature = 0.0f;           // Battery temp (°C)
     unsigned long tempUpdate = 0;
     
-    // From 0x2AE (DCDC_01)
-    float dcdc12v = 0.0f;           // 12V system voltage
-    float dcdcCurrent = 0.0f;       // 12V system current
-    unsigned long dcdcUpdate = 0;
-    
-    // From 0x483 (Motor_Hybrid_06) - Power meter for charging/climate
-    float powerKw = 0.0f;           // Charging/climate power in kW (~10W resolution)
+    // === Power Meter (CAN Motor_Hybrid_06 0x483) ===
+    float powerKw = 0.0f;               // Charging/climate power in kW
     unsigned long powerUpdate = 0;
     
+    // === Cell Balancing (CAN BMS_07 0x5CA) ===
+    bool balancingActive = false;       // Cell balancing in progress
+    unsigned long balancingUpdate = 0;
+    
+    // === 12V System (NOT AVAILABLE - powertrain CAN only) ===
+    float dcdc12v = 0.0f;               // 12V system voltage
+    float dcdcCurrent = 0.0f;           // 12V system current
+    unsigned long dcdcUpdate = 0;
+    
+    // === Helper methods ===
     bool isCharging() const {
-        return chargingActive;
+        return charging;
+    }
+    
+    bool hasSoc() const {
+        return socSource != DataSource::NONE && soc > 0.0f;
     }
     
     float power() const {
-        return voltage * current;  // Negative = discharge
+        return voltage * current;  // Negative = discharge (NOT AVAILABLE)
     }
 };
 
 /**
  * Climate domain state
+ * Consolidates data from CAN (Klima) and BAP (Climate Control)
  */
 struct ClimateState {
-    // From 0x66E (Klima_03)
-    float insideTemp = 0.0f;        // Inside temperature (C)
-    bool standbyHeatingActive = false;
-    bool standbyVentActive = false;
-    unsigned long klimaUpdate = 0;
+    // === Interior Temperature (unified - CAN passive, BAP active) ===
+    float insideTemp = 0.0f;            // Inside temperature (°C)
+    DataSource insideTempSource = DataSource::NONE;
+    unsigned long insideTempUpdate = 0;
     
-    // From 0x5E1 or other
-    float outsideTemp = 0.0f;       // Outside temperature (C)
+    // === Exterior Temperature (CAN only) ===
+    float outsideTemp = 0.0f;           // Outside temperature (°C)
     unsigned long outsideTempUpdate = 0;
+    
+    // === Standby Modes (CAN only 0x66E) ===
+    bool standbyHeatingActive = false;  // Standby heating (not controlled via BAP)
+    bool standbyVentActive = false;     // Standby ventilation
+    unsigned long standbyUpdate = 0;
+    
+    // === Active Climate Control (BAP) ===
+    bool climateActive = false;         // Active climate control running
+    bool heating = false;               // Heating mode
+    bool cooling = false;               // Cooling mode
+    bool ventilation = false;           // Ventilation mode
+    bool autoDefrost = false;           // Auto defrost enabled
+    uint16_t climateTimeMin = 0;        // Remaining time (minutes)
+    unsigned long climateActiveUpdate = 0;
+    
+    // Helper methods
+    bool hasActiveClimate() const {
+        return climateActive;
+    }
+    
+    bool hasStandbyMode() const {
+        return standbyHeatingActive || standbyVentActive;
+    }
 };
 
 /**
@@ -269,9 +355,9 @@ struct RangeState {
 
 /**
  * BAP Plug State (from BAP function 0x10)
- * Updated passively by listening to BAP responses
+ * Separate state since plug connection is independent of battery/charging
  */
-struct BapPlugState {
+struct PlugState {
     uint8_t lockSetup = 0;
     uint8_t lockState = 0;         // 0=unlocked, 1=locked, 2=error
     uint8_t supplyState = 0x0F;    // 0=inactive, 1=active, 2=station connected, F=init
@@ -292,122 +378,26 @@ struct BapPlugState {
 };
 
 /**
- * BAP Charge State (from BAP function 0x11)
- * Updated passively by listening to BAP responses
- */
-enum class BapChargeMode : uint8_t {
-    OFF = 0x0,
-    AC = 0x1,
-    DC = 0x2,
-    CONDITIONING = 0x3,
-    AC_AND_CONDITIONING = 0x4,
-    DC_AND_CONDITIONING = 0x5,
-    INIT = 0xF
-};
-
-enum class BapChargeStatus : uint8_t {
-    INIT = 0x0,
-    IDLE = 0x1,
-    RUNNING = 0x2,
-    CONSERVATION = 0x3,
-    ABORTED_TEMP_LOW = 0x4,
-    ABORTED_DEVICE_ERROR = 0x5,
-    ABORTED_NO_POWER = 0x6,
-    ABORTED_NOT_IN_PARK = 0x7,
-    COMPLETED = 0x8,
-    NO_ERROR = 0x9
-};
-
-struct BapChargeState {
-    BapChargeMode chargeMode = BapChargeMode::INIT;
-    BapChargeStatus chargeStatus = BapChargeStatus::INIT;
-    uint8_t socPercent = 0;           // 0-100%
-    uint8_t remainingTimeMin = 0;     // Minutes to full charge
-    uint8_t currentRange = 0;
-    uint8_t chargingAmps = 0;
-    uint8_t targetSoc = 0;
-    unsigned long lastUpdate = 0;
-    
-    bool isCharging() const { 
-        return chargeMode != BapChargeMode::OFF && 
-               chargeMode != BapChargeMode::INIT &&
-               chargeStatus == BapChargeStatus::RUNNING; 
-    }
-    bool isAcCharging() const { 
-        return chargeMode == BapChargeMode::AC || 
-               chargeMode == BapChargeMode::AC_AND_CONDITIONING; 
-    }
-    bool isDcCharging() const { 
-        return chargeMode == BapChargeMode::DC || 
-               chargeMode == BapChargeMode::DC_AND_CONDITIONING; 
-    }
-    bool isValid() const { return chargeMode != BapChargeMode::INIT; }
-    
-    const char* chargeModeStr() const {
-        switch (chargeMode) {
-            case BapChargeMode::OFF: return "off";
-            case BapChargeMode::AC: return "AC";
-            case BapChargeMode::DC: return "DC";
-            case BapChargeMode::CONDITIONING: return "conditioning";
-            case BapChargeMode::AC_AND_CONDITIONING: return "AC+cond";
-            case BapChargeMode::DC_AND_CONDITIONING: return "DC+cond";
-            default: return "init";
-        }
-    }
-    
-    const char* chargeStatusStr() const {
-        switch (chargeStatus) {
-            case BapChargeStatus::IDLE: return "idle";
-            case BapChargeStatus::RUNNING: return "running";
-            case BapChargeStatus::CONSERVATION: return "conservation";
-            case BapChargeStatus::COMPLETED: return "completed";
-            case BapChargeStatus::ABORTED_TEMP_LOW: return "aborted:cold";
-            case BapChargeStatus::ABORTED_DEVICE_ERROR: return "aborted:error";
-            case BapChargeStatus::ABORTED_NO_POWER: return "aborted:no_power";
-            case BapChargeStatus::ABORTED_NOT_IN_PARK: return "aborted:not_park";
-            case BapChargeStatus::NO_ERROR: return "no_error";
-            default: return "init";
-        }
-    }
-};
-
-/**
- * BAP Climate State (from BAP function 0x12)
- * Updated passively by listening to BAP responses
- */
-struct BapClimateState {
-    bool climateActive = false;
-    bool autoDefrost = false;
-    bool heating = false;
-    bool cooling = false;
-    bool ventilation = false;
-    float currentTempC = 0.0f;
-    uint16_t climateTimeMin = 0;      // Remaining time
-    uint8_t climateState = 0;
-    unsigned long lastUpdate = 0;
-    
-    bool isActive() const { return climateActive; }
-    bool isValid() const { return lastUpdate > 0; }
-};
-
-/**
- * Combined vehicle state
+ * Combined vehicle state - Unified view of all vehicle data
+ * 
+ * Data source priority (for fields with multiple sources):
+ * 1. BAP (extended CAN 29-bit) - most detailed and reliable
+ * 2. Standard CAN (11-bit) - broadcast data, less detailed
+ * 3. Computed - derived values
  */
 struct VehicleState {
-    // Broadcast domain states
-    BodyState body;
-    DriveState drive;
-    BatteryState battery;
-    ClimateState climate;
-    CanGpsState gps;
-    RangeState range;
+    // === Core Vehicle Domains ===
+    BodyState body;         // Doors, locks, windows
+    DriveState drive;       // Ignition, speed, odometer
+    BatteryState battery;   // SOC, charging, energy (consolidated CAN+BAP)
+    ClimateState climate;   // Temperature, HVAC (consolidated CAN+BAP)
+    CanGpsState gps;        // GPS position from CAN
+    RangeState range;       // Range estimation
     
-    // BAP domain states (from passive listening)
-    BapPlugState bapPlug;
-    BapChargeState bapCharge;
-    BapClimateState bapClimate;
+    // === Plug State (BAP only) ===
+    PlugState plug;         // Charging plug connection state
     
-    // Global update tracking
+    // === Global Metadata ===
     unsigned long lastCanActivity = 0;
     uint32_t canFrameCount = 0;
     

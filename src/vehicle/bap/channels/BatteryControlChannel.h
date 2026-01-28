@@ -173,9 +173,9 @@ public:
     // State accessors
     // =========================================================================
     
-    const BapPlugState& getPlugState() const { return state.bapPlug; }
-    const BapChargeState& getChargeState() const { return state.bapCharge; }
-    const BapClimateState& getClimateState() const { return state.bapClimate; }
+    const PlugState& getPlugState() const { return state.plug; }
+    const BatteryState& getBatteryState() const { return state.battery; }
+    const ClimateState& getClimateState() const { return state.climate; }
     
     // =========================================================================
     // Command State Machine

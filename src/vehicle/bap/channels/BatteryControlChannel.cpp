@@ -65,7 +65,7 @@ void BatteryControlChannel::processPlugState(const uint8_t* payload, uint8_t len
     
     PlugStateData decoded = decodePlugState(payload, len);
     
-    BapPlugState& plug = state.bapPlug;
+    PlugState& plug = state.plug;
     plug.lockSetup = decoded.lockSetup;
     plug.lockState = decoded.lockState;
     plug.supplyState = static_cast<uint8_t>(decoded.supplyState);
@@ -85,15 +85,27 @@ void BatteryControlChannel::processChargeState(const uint8_t* payload, uint8_t l
     
     ChargeStateData decoded = decodeChargeState(payload, len);
     
-    BapChargeState& charge = state.bapCharge;
-    charge.chargeMode = static_cast<BapChargeMode>(static_cast<uint8_t>(decoded.chargeMode));
-    charge.chargeStatus = static_cast<BapChargeStatus>(static_cast<uint8_t>(decoded.chargeStatus));
-    charge.socPercent = decoded.socPercent;
-    charge.remainingTimeMin = decoded.remainingTimeMin;
-    charge.currentRange = decoded.currentRange;
-    charge.chargingAmps = decoded.chargingAmps;
-    charge.targetSoc = decoded.targetSoc;
-    charge.lastUpdate = millis();
+    BatteryState& battery = state.battery;
+    
+    // Update unified SOC field (BAP source - takes priority over CAN)
+    battery.soc = decoded.socPercent;
+    battery.socSource = DataSource::BAP;
+    battery.socUpdate = millis();
+    
+    // Update unified charging field (BAP source - more detailed than CAN)
+    battery.charging = (decoded.chargeMode != ChargeMode::OFF && 
+                        decoded.chargeMode != ChargeMode::INIT &&
+                        decoded.chargeStatus == ChargeStatus::RUNNING);
+    battery.chargingSource = DataSource::BAP;
+    battery.chargingUpdate = millis();
+    
+    // Store detailed charging info
+    battery.chargingMode = static_cast<uint8_t>(decoded.chargeMode);
+    battery.chargingStatus = static_cast<uint8_t>(decoded.chargeStatus);
+    battery.chargingAmps = decoded.chargingAmps;
+    battery.targetSoc = decoded.targetSoc;
+    battery.remainingTimeMin = decoded.remainingTimeMin;
+    battery.chargingDetailsUpdate = millis();
 }
 
 void BatteryControlChannel::processClimateState(const uint8_t* payload, uint8_t len) {
@@ -104,16 +116,23 @@ void BatteryControlChannel::processClimateState(const uint8_t* payload, uint8_t 
     
     ClimateStateData decoded = decodeClimateState(payload, len);
     
-    BapClimateState& climate = state.bapClimate;
+    ClimateState& climate = state.climate;
+    
+    // Update unified climate fields (BAP source for active climate control)
     climate.climateActive = decoded.climateActive;
-    climate.autoDefrost = decoded.autoDefrost;
     climate.heating = decoded.heating;
     climate.cooling = decoded.cooling;
     climate.ventilation = decoded.ventilation;
-    climate.currentTempC = decoded.currentTempC;
+    climate.autoDefrost = decoded.autoDefrost;
     climate.climateTimeMin = decoded.climateTimeMin;
-    climate.climateState = decoded.climateState;
-    climate.lastUpdate = millis();
+    climate.climateActiveUpdate = millis();
+    
+    // Update inside temperature if climate is active (BAP priority)
+    if (decoded.climateActive) {
+        climate.insideTemp = decoded.currentTempC;
+        climate.insideTempSource = DataSource::BAP;
+        climate.insideTempUpdate = millis();
+    }
     
     // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }

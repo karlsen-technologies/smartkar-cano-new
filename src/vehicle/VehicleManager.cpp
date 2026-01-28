@@ -237,8 +237,10 @@ void VehicleManager::logStatistics()
                   batt.energyWh, batt.maxEnergyWh,
                   batt.maxEnergyWh > 0 ? (batt.energyWh / batt.maxEnergyWh * 100.0f) : 0.0f,
                   batt.temperature, batt.powerKw);
-    Serial.printf("[VehicleManager] Charging: %s, Balancing: %s\r\n",
-                  batt.chargingActive ? "YES" : "no",
+    Serial.printf("[VehicleManager] Charging: %s (source:%s), Balancing: %s\r\n",
+                  batt.charging ? "YES" : "no",
+                  batt.chargingSource == DataSource::BAP ? "BAP" :
+                  batt.chargingSource == DataSource::CAN_STD ? "CAN" : "none",
                   batt.balancingActive ? "YES" : "no");
 
     // Drive status
@@ -271,10 +273,12 @@ void VehicleManager::logStatistics()
 
     // Climate status
     const ClimateState &clim = snapshot.climate;
-    Serial.printf("[VehicleManager] Temps: inside=%.1f°C outside=%.1f°C\r\n",
-                  clim.insideTemp, clim.outsideTemp);
+    Serial.printf("[VehicleManager] Temps: inside=%.1f°C (source:%s) outside=%.1f°C\r\n",
+                  clim.insideTemp,
+                  clim.insideTempSource == DataSource::BAP ? "BAP" : "CAN",
+                  clim.outsideTemp);
     Serial.printf("[VehicleManager] Standby heat:%d vent:%d (updated: %lu)\r\n",
-                  clim.standbyHeatingActive, clim.standbyVentActive, clim.klimaUpdate);
+                  clim.standbyHeatingActive, clim.standbyVentActive, clim.standbyUpdate);
 
     // GPS status
     const CanGpsState &gps = snapshot.gps;
@@ -311,27 +315,35 @@ void VehicleManager::logStatistics()
         cmdQueued, cmdCompleted, cmdFailed,
         cmdQueued > 0 ? (cmdCompleted * 100.0f / cmdQueued) : 100.0f);
 
-    // BAP status
-    const BapPlugState &plug = snapshot.bapPlug;
-    const BapChargeState &charge = snapshot.bapCharge;
-    const BapClimateState &bapClim = snapshot.bapClimate;
-    if (plug.isValid() || charge.isValid() || bapClim.isValid())
+    // BAP status (consolidated into main state)
+    const PlugState &plug = snapshot.plug;
+    const BatteryState &batt2 = snapshot.battery;
+    const ClimateState &clim2 = snapshot.climate;
+    
+    if (plug.isValid())
     {
         Serial.printf("[VehicleManager] BAP Plug: %s (supply:%s lock:%d)\r\n",
                       plug.plugStateStr(),
                       plug.hasSupply() ? "yes" : "no",
                       plug.lockState);
-        Serial.printf("[VehicleManager] BAP Charge: SOC=%d%% mode=%s status=%s time=%dmin\r\n",
-                      charge.socPercent,
-                      charge.chargeModeStr(),
-                      charge.chargeStatusStr(),
-                      charge.remainingTimeMin);
-        if (bapClim.isValid())
-        {
-            Serial.printf("[VehicleManager] BAP Climate: %s (heat:%d cool:%d temp:%.1f°C)\r\n",
-                          bapClim.climateActive ? "ACTIVE" : "off",
-                          bapClim.heating, bapClim.cooling, bapClim.currentTempC);
-        }
+    }
+    
+    if (batt2.socSource == DataSource::BAP || batt2.chargingDetailsUpdate > 0)
+    {
+        Serial.printf("[VehicleManager] BAP Charge: SOC=%.0f%% mode=%d status=%d amps=%d target=%d%% time=%dmin\r\n",
+                      batt2.soc,
+                      batt2.chargingMode,
+                      batt2.chargingStatus,
+                      batt2.chargingAmps,
+                      batt2.targetSoc,
+                      batt2.remainingTimeMin);
+    }
+    
+    if (clim2.climateActive)
+    {
+        Serial.printf("[VehicleManager] BAP Climate: %s (heat:%d cool:%d temp:%.1f°C time:%dmin)\r\n",
+                      clim2.climateActive ? "ACTIVE" : "off",
+                      clim2.heating, clim2.cooling, clim2.insideTemp, clim2.climateTimeMin);
     }
 
     Serial.println("[VehicleManager] ======================");
