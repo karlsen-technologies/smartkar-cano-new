@@ -137,6 +137,7 @@ private:
     // Timing
     unsigned long bootTime = 0;
     unsigned long lastActivityTime = 0;
+    unsigned long lastSleepLogTime = 0;  // For rate-limiting sleep diagnostics
     
     // Sleep control
     bool sleepRequested = false;
