@@ -79,14 +79,15 @@ CommandResult VehicleHandler::handleStartClimate(CommandContext& ctx) {
                   tempCelsius, allowBattery ? "yes" : "no");
     
     // Use ChargingProfileManager for proper profile 0 configuration + trigger
-    bool success = vehicleManager->profiles().startClimateNow(tempCelsius, allowBattery);
+    bool queued = vehicleManager->profiles().startClimateNow(tempCelsius, allowBattery);
     
-    if (success) {
-        CommandResult result = CommandResult::ok("Climate start command sent");
+    if (queued) {
+        CommandResult result = CommandResult::ok("Climate start command queued");
         result.data["temperature"] = tempCelsius;
         result.data["allowBattery"] = allowBattery;
+        result.data["status"] = "queued";
         
-        // Emit event for climate start
+        // Emit event for climate start request
         if (commandRouter) {
             JsonDocument eventDoc;
             JsonObject details = eventDoc.to<JsonObject>();
@@ -97,7 +98,7 @@ CommandResult VehicleHandler::handleStartClimate(CommandContext& ctx) {
         
         return result;
     } else {
-        return CommandResult::error("Failed to send climate start command");
+        return CommandResult::error("Command busy - another command in progress");
     }
 }
 
@@ -105,17 +106,19 @@ CommandResult VehicleHandler::handleStopClimate(CommandContext& ctx) {
     Serial.println("[VEHICLE] Stopping climate control");
     
     // Use ChargingProfileManager for proper stop sequence
-    bool success = vehicleManager->profiles().stopClimateNow();
+    bool queued = vehicleManager->profiles().stopClimateNow();
     
-    if (success) {
-        // Emit event for climate stop
+    if (queued) {
+        // Emit event for climate stop request
         if (commandRouter) {
             commandRouter->sendEvent("vehicle", "climateStopRequested", nullptr);
         }
         
-        return CommandResult::ok("Climate stop command sent");
+        CommandResult result = CommandResult::ok("Climate stop command queued");
+        result.data["status"] = "queued";
+        return result;
     } else {
-        return CommandResult::error("Failed to send climate stop command");
+        return CommandResult::error("Command busy - another command in progress");
     }
 }
 
@@ -148,12 +151,13 @@ CommandResult VehicleHandler::handleStartCharging(CommandContext& ctx) {
     Serial.printf("[VEHICLE] Charging params: targetSoc=%d%%, maxCurrent=%dA\r\n", targetSoc, maxCurrent);
     
     // Use ChargingProfileManager for proper profile 0 configuration + trigger
-    bool success = vehicleManager->profiles().startChargingNow(targetSoc, maxCurrent);
+    bool queued = vehicleManager->profiles().startChargingNow(targetSoc, maxCurrent);
     
-    if (success) {
-        CommandResult result = CommandResult::ok("Charging start command sent");
+    if (queued) {
+        CommandResult result = CommandResult::ok("Charging start command queued");
         result.data["targetSoc"] = targetSoc;
         result.data["maxCurrent"] = maxCurrent;
+        result.data["status"] = "queued";
         
         // Emit event for charging start request
         if (commandRouter) {
@@ -166,7 +170,7 @@ CommandResult VehicleHandler::handleStartCharging(CommandContext& ctx) {
         
         return result;
     } else {
-        return CommandResult::error("Failed to send charging start command");
+        return CommandResult::error("Command busy - another command in progress");
     }
 }
 
@@ -174,17 +178,19 @@ CommandResult VehicleHandler::handleStopCharging(CommandContext& ctx) {
     Serial.println("[VEHICLE] Stopping charging");
     
     // Use ChargingProfileManager for proper stop sequence
-    bool success = vehicleManager->profiles().stopChargingNow();
+    bool queued = vehicleManager->profiles().stopChargingNow();
     
-    if (success) {
+    if (queued) {
         // Emit event for charging stop request
         if (commandRouter) {
             commandRouter->sendEvent("vehicle", "chargingStopRequested", nullptr);
         }
         
-        return CommandResult::ok("Charging stop command sent");
+        CommandResult result = CommandResult::ok("Charging stop command queued");
+        result.data["status"] = "queued";
+        return result;
     } else {
-        return CommandResult::error("Failed to send charging stop command");
+        return CommandResult::error("Command busy - another command in progress");
     }
 }
 
@@ -196,9 +202,9 @@ CommandResult VehicleHandler::handleRequestState(CommandContext& ctx) {
     Serial.println("[VEHICLE] Requesting BAP states...");
     
     // Request all BAP states from the vehicle
-    bool plugOk = vehicleManager->bap().requestPlugState();
-    bool chargeOk = vehicleManager->bap().requestChargeState();
-    bool climateOk = vehicleManager->bap().requestClimateState();
+    bool plugOk = vehicleManager->batteryControl().requestPlugState();
+    bool chargeOk = vehicleManager->batteryControl().requestChargeState();
+    bool climateOk = vehicleManager->batteryControl().requestClimateState();
     
     CommandResult result = CommandResult::ok("State requests sent");
     result.data["plugRequested"] = plugOk;

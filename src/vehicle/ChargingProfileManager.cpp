@@ -5,6 +5,20 @@ using namespace ChargingProfile;
 using namespace BapProtocol;
 
 // =============================================================================
+// Battery Control Constants (Device 0x25)
+// =============================================================================
+
+namespace {
+    constexpr uint8_t DEVICE_BATTERY_CONTROL = 0x25;
+    constexpr uint32_t CAN_ID_BATTERY_TX = 0x17332501;  // Commands TO battery control
+    
+    namespace Function {
+        constexpr uint8_t OPERATION_MODE = 0x18;
+        constexpr uint8_t PROFILES_ARRAY = 0x19;
+    }
+}
+
+// =============================================================================
 // Constructor
 // =============================================================================
 
@@ -49,70 +63,49 @@ bool ChargingProfileManager::isProfileValid(uint8_t index) const {
 // =============================================================================
 
 bool ChargingProfileManager::startClimateNow(float tempCelsius, bool allowBattery) {
-    Serial.printf("[ProfileMgr] Starting climate at %.1f°C (battery=%s)\r\n", 
+    Serial.printf("[ProfileMgr] Start climate request: %.1f°C (battery=%s)\r\n", 
                   tempCelsius, allowBattery ? "yes" : "no");
-    
-    // Build operation mode
-    uint8_t mode = allowBattery ? OperationMode::CLIMATE_ALLOW_BATTERY 
-                                : OperationMode::CLIMATE_ONLY;
     
     // Update profile 0's temperature setting locally
     profiles[PROFILE_IMMEDIATE].setTemperature(tempCelsius);
     
-    // Send the configuration + trigger sequence
-    if (!sendProfileConfig(mode, 32, 0)) {
-        return false;
-    }
-    
-    // Small delay between profile config and trigger
-    delay(50);
-    
-    return sendOperationTrigger(true);
+    // Delegate to BatteryControlChannel (non-blocking)
+    return manager->batteryControl().startClimate(tempCelsius, allowBattery);
 }
 
 bool ChargingProfileManager::stopClimateNow() {
-    Serial.println("[ProfileMgr] Stopping climate...");
-    return sendOperationTrigger(false);
+    Serial.println("[ProfileMgr] Stop climate request");
+    
+    // Delegate to BatteryControlChannel (non-blocking)
+    return manager->batteryControl().stopClimate();
 }
 
 bool ChargingProfileManager::startChargingNow(uint8_t targetSoc, uint8_t maxCurrent) {
-    Serial.printf("[ProfileMgr] Starting charging (target=%d%%, max=%dA)\r\n", 
+    Serial.printf("[ProfileMgr] Start charging request: target=%d%%, max=%dA\r\n", 
                   targetSoc, maxCurrent);
     
-    // Send the configuration + trigger sequence
-    if (!sendProfileConfig(OperationMode::CHARGING_ONLY, maxCurrent, targetSoc)) {
-        return false;
-    }
-    
-    delay(50);
-    
-    return sendOperationTrigger(true);
+    // Delegate to BatteryControlChannel (non-blocking)
+    return manager->batteryControl().startCharging(targetSoc, maxCurrent);
 }
 
 bool ChargingProfileManager::stopChargingNow() {
-    Serial.println("[ProfileMgr] Stopping charging...");
-    return sendOperationTrigger(false);
+    Serial.println("[ProfileMgr] Stop charging request");
+    
+    // Delegate to BatteryControlChannel (non-blocking)
+    return manager->batteryControl().stopCharging();
 }
 
 bool ChargingProfileManager::startChargingAndClimateNow(float tempCelsius, 
                                                          uint8_t targetSoc,
                                                          bool allowClimateOnBattery) {
-    Serial.printf("[ProfileMgr] Starting charging+climate (temp=%.1f, soc=%d%%)\r\n",
+    Serial.printf("[ProfileMgr] Start charging+climate request: temp=%.1f, soc=%d%%\r\n",
                   tempCelsius, targetSoc);
     
-    uint8_t mode = allowClimateOnBattery 
-        ? OperationMode::CHARGING_AND_CLIMATE_ALLOW_BATTERY
-        : OperationMode::CHARGING_AND_CLIMATE;
-    
+    // Update profile 0's temperature setting locally
     profiles[PROFILE_IMMEDIATE].setTemperature(tempCelsius);
     
-    if (!sendProfileConfig(mode, 32, targetSoc)) {
-        return false;
-    }
-    
-    delay(50);
-    
-    return sendOperationTrigger(true);
+    // Use the new combined command
+    return manager->batteryControl().startChargingAndClimate(tempCelsius, targetSoc, 32, allowClimateOnBattery);
 }
 
 // =============================================================================

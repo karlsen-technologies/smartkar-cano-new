@@ -18,6 +18,8 @@ typedef bool (*ResponseSender)(const String& message);
 /**
  * CommandRouter - Central hub for command routing and telemetry collection
  * 
+ * Singleton design allows any module to emit events without passing pointers.
+ * 
  * Responsibilities:
  * - Register and manage command handlers by domain
  * - Route incoming commands to appropriate handlers
@@ -26,17 +28,26 @@ typedef bool (*ResponseSender)(const String& message);
  * - Manage built-in system commands (ping, status, etc.)
  * 
  * Usage:
- *   CommandRouter router;
- *   router.registerHandler(&chargingModule);
- *   router.registerProvider(&chargingModule);
- *   router.setResponseSender([](const String& msg) { return linkManager.send(msg); });
+ *   CommandRouter* router = new CommandRouter();
+ *   router->registerHandler(&chargingModule);
+ *   router->registerProvider(&chargingModule);
+ *   router->setResponseSender([](const String& msg) { return linkManager.send(msg); });
  *   
  *   // In LinkManager::handleMessage():
- *   router.handleCommand(action, id, params);
+ *   router->handleCommand(action, id, params);
+ *   
+ *   // From any module:
+ *   CommandRouter::getInstance()->sendEvent("vehicle", "commandCompleted", &details);
  */
 class CommandRouter {
 public:
     CommandRouter();
+    
+    /**
+     * Get the singleton instance.
+     * Returns nullptr if instance not yet created.
+     */
+    static CommandRouter* getInstance() { return _instance; }
     
     /**
      * Register a command handler.

@@ -13,6 +13,7 @@
 #include "../handlers/ChargingProfileHandler.h"
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include "esp_sleep.h"
 #include "esp_system.h"
 
@@ -377,9 +378,15 @@ void DeviceController::handleLowBattery(uint8_t level) {
         // Level 1 = 10% warning - initiate graceful shutdown
         Serial.println("[DEVICE] Initiating low battery shutdown sequence...");
         
-        // TODO: Send low_battery event to server via LinkManager
-        // For now, just log and prepare for shutdown
-        // linkManager->sendEvent("low_battery", ...);
+        // Send low_battery event to server
+        if (commandRouter) {
+            JsonDocument doc;
+            JsonObject details = doc.to<JsonObject>();
+            details["level"] = level;
+            details["percentage"] = 10;
+            details["action"] = "shutdown_initiated";
+            commandRouter->sendEvent("device", "lowBattery", &details);
+        }
         
         // Disconnect from server gracefully
         linkManager->prepareForSleep();
@@ -398,6 +405,16 @@ void DeviceController::handleLowBattery(uint8_t level) {
         // Level 2 = 5% critical - we might not have sent level 1 if it happened during sleep
         // Do emergency shutdown
         Serial.println("[DEVICE] CRITICAL battery - emergency shutdown!");
+        
+        // Try to send critical event (may not complete if modem disconnected)
+        if (commandRouter) {
+            JsonDocument doc;
+            JsonObject details = doc.to<JsonObject>();
+            details["level"] = level;
+            details["percentage"] = 5;
+            details["action"] = "emergency_shutdown";
+            commandRouter->sendEvent("device", "lowBattery", &details);
+        }
         
         // Just kill the modem and sleep immediately
         powerManager->setModemPower(false);

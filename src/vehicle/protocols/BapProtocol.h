@@ -21,45 +21,12 @@
 namespace BapProtocol {
 
 // =============================================================================
-// CAN IDs
+// CAN IDs (Generic BAP protocol)
 // =============================================================================
-
-// Battery Control channel (Device 0x25)
-constexpr uint32_t CAN_ID_BATTERY_TX = 0x17332501;  // Commands TO battery control
-constexpr uint32_t CAN_ID_BATTERY_RX = 0x17332510;  // Responses FROM battery control
 
 // Wake/Init (for reference, not primary focus)
 constexpr uint32_t CAN_ID_WAKE = 0x17330301;
 constexpr uint32_t CAN_ID_BAP_INIT = 0x1B000067;
-
-// =============================================================================
-// Device IDs
-// =============================================================================
-
-constexpr uint8_t DEVICE_BATTERY_CONTROL = 0x25;
-constexpr uint8_t DEVICE_DOOR_LOCKING = 0x0D;
-constexpr uint8_t DEVICE_ENI = 0x37;
-
-// =============================================================================
-// Function IDs (Battery Control - Device 0x25)
-// =============================================================================
-
-namespace Function {
-    constexpr uint8_t GET_ALL_PROPERTIES = 0x01;
-    constexpr uint8_t BAP_CONFIG = 0x02;
-    constexpr uint8_t FUNCTION_LIST = 0x03;
-    constexpr uint8_t HEARTBEAT_CONFIG = 0x04;
-    constexpr uint8_t FSG_SETUP = 0x0E;
-    constexpr uint8_t FSG_OPERATION_STATE = 0x0F;
-    constexpr uint8_t PLUG_STATE = 0x10;          // Plug connection and lock
-    constexpr uint8_t CHARGE_STATE = 0x11;        // SOC, charging status
-    constexpr uint8_t CLIMATE_STATE = 0x12;       // Climate active, temps
-    constexpr uint8_t START_STOP_CHARGE = 0x14;   // Start/stop charging
-    constexpr uint8_t START_STOP_CLIMATE = 0x15;  // Start/stop climate
-    constexpr uint8_t OPERATION_MODE = 0x18;      // Climate operation mode
-    constexpr uint8_t PROFILES_ARRAY = 0x19;      // Charging/climate profiles
-    constexpr uint8_t POWER_PROVIDERS = 0x1A;     // Power provider info
-}
 
 // =============================================================================
 // OpCodes
@@ -78,46 +45,6 @@ namespace OpCode {
     constexpr uint8_t ACK = 0x06;           // Simple acknowledgment
     constexpr uint8_t ERROR = 0x07;         // Command failed
 }
-
-// =============================================================================
-// Charge/Climate State Enums
-// =============================================================================
-
-enum class ChargeMode : uint8_t {
-    OFF = 0x0,
-    AC = 0x1,
-    DC = 0x2,
-    CONDITIONING = 0x3,
-    AC_AND_CONDITIONING = 0x4,
-    DC_AND_CONDITIONING = 0x5,
-    INIT = 0xF
-};
-
-enum class ChargeStatus : uint8_t {
-    INIT = 0x0,
-    IDLE = 0x1,
-    RUNNING = 0x2,
-    CONSERVATION = 0x3,
-    ABORTED_TEMP_LOW = 0x4,
-    ABORTED_DEVICE_ERROR = 0x5,
-    ABORTED_NO_POWER = 0x6,
-    ABORTED_NOT_IN_PARK = 0x7,
-    COMPLETED = 0x8,
-    NO_ERROR = 0x9
-};
-
-enum class PlugStatus : uint8_t {
-    UNPLUGGED = 0x0,
-    PLUGGED = 0x1,
-    INIT = 0xF
-};
-
-enum class SupplyStatus : uint8_t {
-    INACTIVE = 0x0,
-    ACTIVE = 0x1,
-    CHARGE_STATION_CONNECTED = 0x2,
-    INIT = 0xF
-};
 
 // =============================================================================
 // Decoded Message Structure
@@ -235,105 +162,29 @@ uint8_t encodeLongContinuation(uint8_t* dest, const uint8_t* payload,
                                 uint8_t payloadLen, uint8_t group = 0, uint8_t index = 0);
 
 // =============================================================================
-// Payload Decoders (for specific functions)
-// =============================================================================
-
-struct PlugStateData {
-    uint8_t lockSetup = 0;
-    uint8_t lockState = 0;
-    SupplyStatus supplyState = SupplyStatus::INIT;
-    PlugStatus plugState = PlugStatus::INIT;
-    
-    bool isPlugged() const { return plugState == PlugStatus::PLUGGED; }
-    bool hasSupply() const { return supplyState == SupplyStatus::ACTIVE || 
-                                   supplyState == SupplyStatus::CHARGE_STATION_CONNECTED; }
-};
-
-struct ChargeStateData {
-    ChargeMode chargeMode = ChargeMode::INIT;
-    ChargeStatus chargeStatus = ChargeStatus::INIT;
-    uint8_t socPercent = 0;           // 0-100%
-    uint8_t remainingTimeMin = 0;     // Minutes to full
-    uint8_t currentRange = 0;         // Current range value
-    uint8_t rangeUnit = 0;            // Range unit
-    uint8_t chargingAmps = 0;         // Charging current
-    uint8_t batteryClimateState = 0;  // Battery conditioning
-    uint8_t startReason = 0;
-    uint8_t targetSoc = 0;
-    
-    bool isCharging() const { 
-        return chargeMode != ChargeMode::OFF && chargeMode != ChargeMode::INIT &&
-               chargeStatus == ChargeStatus::RUNNING; 
-    }
-    bool isAcCharging() const { 
-        return chargeMode == ChargeMode::AC || chargeMode == ChargeMode::AC_AND_CONDITIONING; 
-    }
-    bool isDcCharging() const { 
-        return chargeMode == ChargeMode::DC || chargeMode == ChargeMode::DC_AND_CONDITIONING; 
-    }
-};
-
-struct ClimateStateData {
-    bool climateActive = false;
-    bool autoDefrost = false;
-    bool heating = false;
-    bool cooling = false;
-    bool ventilation = false;
-    bool fuelBasedHeating = false;
-    float currentTempC = 0.0f;
-    uint8_t tempUnit = 0;
-    uint16_t climateTimeMin = 0;
-    uint8_t climateState = 0;
-    
-    bool isActive() const { return climateActive; }
-};
-
-/**
- * Decode PlugState payload (function 0x10)
- */
-PlugStateData decodePlugState(const uint8_t* payload, uint8_t len);
-
-/**
- * Decode ChargeState payload (function 0x11)
- */
-ChargeStateData decodeChargeState(const uint8_t* payload, uint8_t len);
-
-/**
- * Decode ClimateState payload (function 0x12)
- */
-ClimateStateData decodeClimateState(const uint8_t* payload, uint8_t len);
-
-// =============================================================================
-// Command Builders
+// Generic Command Builders
 // =============================================================================
 
 /**
- * Build a Get request for a function
+ * Build a GET request for any device/function
+ * @param deviceId Target device ID (e.g., 0x25 for Battery Control)
+ * @param functionId Function to query
  */
-inline uint8_t buildGetRequest(uint8_t* dest, uint8_t functionId) {
-    return encodeShortMessage(dest, OpCode::GET, DEVICE_BATTERY_CONTROL, functionId);
+inline uint8_t buildGetRequest(uint8_t* dest, uint8_t deviceId, uint8_t functionId) {
+    return encodeShortMessage(dest, OpCode::GET, deviceId, functionId);
 }
 
 /**
- * Build climate start command
- * @param temp Temperature in Celsius (15.5 - 30.0)
+ * Build a SET_GET request for any device/function
+ * @param deviceId Target device ID
+ * @param functionId Function to invoke
+ * @param payload Optional payload data
+ * @param payloadLen Length of payload
  */
-uint8_t buildClimateStart(uint8_t* dest, float tempCelsius);
-
-/**
- * Build climate stop command
- */
-uint8_t buildClimateStop(uint8_t* dest);
-
-/**
- * Build charge start command
- */
-uint8_t buildChargeStart(uint8_t* dest);
-
-/**
- * Build charge stop command
- */
-uint8_t buildChargeStop(uint8_t* dest);
+inline uint8_t buildSetGetRequest(uint8_t* dest, uint8_t deviceId, uint8_t functionId,
+                                   const uint8_t* payload = nullptr, uint8_t payloadLen = 0) {
+    return encodeShortMessage(dest, OpCode::SET_GET, deviceId, functionId, payload, payloadLen);
+}
 
 // =============================================================================
 // BAP Frame Assembler - Abstracts short/long message handling
