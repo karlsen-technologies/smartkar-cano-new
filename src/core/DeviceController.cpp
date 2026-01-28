@@ -304,8 +304,13 @@ bool DeviceController::canSleep() {
 
 void DeviceController::prepareForSleep() {
     Serial.println("[DEVICE] Notifying modules of impending sleep...");
-
-    // Prepare in reverse dependency order
+    
+    // Stop VehicleManager from processing CAN frames FIRST (before CAN task is killed)
+    if (vehicleManager) {
+        vehicleManager->prepareForSleep();
+    }
+    
+    // Now stop modules (CAN task will be deleted here)
     canManager->prepareForSleep();
     linkManager->prepareForSleep();
     modemManager->prepareForSleep();

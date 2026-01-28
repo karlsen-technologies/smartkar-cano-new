@@ -111,6 +111,11 @@ uint32_t VehicleManager::getFrameCount()
 
 void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc, bool extended)
 {
+    // If we're shutting down for sleep, ignore incoming frames
+    if (shuttingDown) {
+        return;
+    }
+    
     // Acquire mutex with 10ms timeout (CAN task runs at high priority)
     if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
         // Mutex timeout - skip this frame to avoid blocking CAN task

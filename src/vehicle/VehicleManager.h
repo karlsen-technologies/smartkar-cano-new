@@ -169,6 +169,16 @@ public:
      */
     void setVerbose(bool enabled) { verbose = enabled; }
     
+    /**
+     * Prepare for sleep - stops processing CAN frames.
+     * Call this BEFORE stopping the CAN task to avoid race conditions.
+     */
+    void prepareForSleep() { 
+        shuttingDown = true;
+        // Give any in-progress onCanFrame() calls time to complete
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    
 private:
     CanManager* canManager;
     
@@ -219,6 +229,7 @@ private:
     
     // Configuration
     bool verbose = false;
+    volatile bool shuttingDown = false;  // Set during sleep preparation to stop processing
     
     // Statistics (accessed from CAN task - use volatile)
     unsigned long lastLogTime = 0;
