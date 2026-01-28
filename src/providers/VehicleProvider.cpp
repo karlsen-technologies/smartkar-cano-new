@@ -101,17 +101,16 @@ void VehicleProvider::getTelemetry(JsonObject& data) {
     climate["insideTempSource"] = state.climate.insideTempSource == DataSource::BAP ? "bap" : "can";
     climate["outsideTemp"] = state.climate.outsideTemp;
     
-    // Standby modes (CAN only)
-    climate["standbyHeating"] = state.climate.standbyHeatingActive;
-    climate["standbyVent"] = state.climate.standbyVentActive;
-    
-    // Active climate control (BAP)
+    // Climate control (BAP-only with source tracking)
     climate["active"] = state.climate.climateActive;
-    climate["heating"] = state.climate.heating;
-    climate["cooling"] = state.climate.cooling;
-    climate["ventilation"] = state.climate.ventilation;
-    climate["autoDefrost"] = state.climate.autoDefrost;
-    climate["remainingMin"] = state.climate.climateTimeMin;
+    if (state.climate.climateActiveSource == DataSource::BAP) {
+        climate["activeSource"] = "bap";  // Only BAP provides climate active status (CAN unreliable)
+    }
+    climate["heating"] = state.climate.heating;       // BAP only
+    climate["cooling"] = state.climate.cooling;       // BAP only
+    climate["ventilation"] = state.climate.ventilation;  // BAP only
+    climate["autoDefrost"] = state.climate.autoDefrost;  // BAP only
+    climate["remainingMin"] = state.climate.climateTimeMin;  // BAP only
     
     // === Plug state (BAP only) ===
     if (state.plug.isValid()) {
@@ -259,11 +258,18 @@ void VehicleProvider::checkAndEmitEvents() {
         eventCharging = state.battery.charging;
         eventLocked = state.body.isLocked();
         eventPlugged = state.plug.isPlugged();
+        eventDriverDoorOpen = state.body.driverDoor.open;
+        eventPassengerDoorOpen = state.body.passengerDoor.open;
+        eventRearLeftDoorOpen = state.body.rearLeftDoor.open;
+        eventRearRightDoorOpen = state.body.rearRightDoor.open;
+        eventTrunkOpen = state.body.trunkOpen;
+        eventClimateActive = state.climate.climateActive;
+        eventLastSoc = state.battery.soc;
         eventsInitialized = true;
         return;
     }
     
-    // Check ignition change
+    // === Ignition Events ===
     if (state.drive.ignitionOn != eventIgnitionOn) {
         eventIgnitionOn = state.drive.ignitionOn;
         if (eventIgnitionOn) {
@@ -275,7 +281,7 @@ void VehicleProvider::checkAndEmitEvents() {
         }
     }
     
-    // Check charging change (unified field)
+    // === Charging Events ===
     if (state.battery.charging != eventCharging) {
         eventCharging = state.battery.charging;
         JsonDocument doc;
@@ -292,7 +298,7 @@ void VehicleProvider::checkAndEmitEvents() {
         }
     }
     
-    // Check lock change
+    // === Lock Events ===
     if (state.body.isLocked() != eventLocked) {
         eventLocked = state.body.isLocked();
         if (eventLocked) {
@@ -304,7 +310,7 @@ void VehicleProvider::checkAndEmitEvents() {
         }
     }
     
-    // Check plug change
+    // === Plug Events ===
     if (state.plug.isPlugged() != eventPlugged) {
         eventPlugged = state.plug.isPlugged();
         JsonDocument doc;
@@ -318,5 +324,136 @@ void VehicleProvider::checkAndEmitEvents() {
             Serial.println("[VEHICLE] Event: unplugged");
             emitEvent("unplugged", &details);
         }
+    }
+    
+    // === Door Events ===
+    if (state.body.driverDoor.open != eventDriverDoorOpen) {
+        eventDriverDoorOpen = state.body.driverDoor.open;
+        JsonDocument doc;
+        JsonObject details = doc.to<JsonObject>();
+        details["door"] = "driver";
+        if (eventDriverDoorOpen) {
+            Serial.println("[VEHICLE] Event: doorOpened (driver)");
+            emitEvent("doorOpened", &details);
+        } else {
+            Serial.println("[VEHICLE] Event: doorClosed (driver)");
+            emitEvent("doorClosed", &details);
+        }
+    }
+    
+    if (state.body.passengerDoor.open != eventPassengerDoorOpen) {
+        eventPassengerDoorOpen = state.body.passengerDoor.open;
+        JsonDocument doc;
+        JsonObject details = doc.to<JsonObject>();
+        details["door"] = "passenger";
+        if (eventPassengerDoorOpen) {
+            Serial.println("[VEHICLE] Event: doorOpened (passenger)");
+            emitEvent("doorOpened", &details);
+        } else {
+            Serial.println("[VEHICLE] Event: doorClosed (passenger)");
+            emitEvent("doorClosed", &details);
+        }
+    }
+    
+    if (state.body.rearLeftDoor.open != eventRearLeftDoorOpen) {
+        eventRearLeftDoorOpen = state.body.rearLeftDoor.open;
+        JsonDocument doc;
+        JsonObject details = doc.to<JsonObject>();
+        details["door"] = "rearLeft";
+        if (eventRearLeftDoorOpen) {
+            Serial.println("[VEHICLE] Event: doorOpened (rearLeft)");
+            emitEvent("doorOpened", &details);
+        } else {
+            Serial.println("[VEHICLE] Event: doorClosed (rearLeft)");
+            emitEvent("doorClosed", &details);
+        }
+    }
+    
+    if (state.body.rearRightDoor.open != eventRearRightDoorOpen) {
+        eventRearRightDoorOpen = state.body.rearRightDoor.open;
+        JsonDocument doc;
+        JsonObject details = doc.to<JsonObject>();
+        details["door"] = "rearRight";
+        if (eventRearRightDoorOpen) {
+            Serial.println("[VEHICLE] Event: doorOpened (rearRight)");
+            emitEvent("doorOpened", &details);
+        } else {
+            Serial.println("[VEHICLE] Event: doorClosed (rearRight)");
+            emitEvent("doorClosed", &details);
+        }
+    }
+    
+    // === Trunk Events ===
+    if (state.body.trunkOpen != eventTrunkOpen) {
+        eventTrunkOpen = state.body.trunkOpen;
+        if (eventTrunkOpen) {
+            Serial.println("[VEHICLE] Event: trunkOpened");
+            emitEvent("trunkOpened", nullptr);
+        } else {
+            Serial.println("[VEHICLE] Event: trunkClosed");
+            emitEvent("trunkClosed", nullptr);
+        }
+    }
+    
+    // === Climate Events ===
+    if (state.climate.climateActive != eventClimateActive) {
+        eventClimateActive = state.climate.climateActive;
+        JsonDocument doc;
+        JsonObject details = doc.to<JsonObject>();
+        details["heating"] = state.climate.heating;
+        details["cooling"] = state.climate.cooling;
+        details["temp"] = state.climate.insideTemp;
+        
+        if (eventClimateActive) {
+            Serial.println("[VEHICLE] Event: climateStarted");
+            emitEvent("climateStarted", &details);
+        } else {
+            Serial.println("[VEHICLE] Event: climateStopped");
+            emitEvent("climateStopped", &details);
+        }
+    }
+    
+    // === SOC Threshold Events (20%, 50%, 80%, 100%) ===
+    float currentSoc = state.battery.soc;
+    if (state.battery.hasSoc() && eventLastSoc > 0) {
+        // Check if we crossed any threshold
+        int lastThreshold = (int)(eventLastSoc / 20) * 20;  // Round down to nearest 20%
+        int currentThreshold = (int)(currentSoc / 20) * 20;
+        
+        if (currentThreshold != lastThreshold && currentThreshold > 0) {
+            // Crossed a threshold
+            JsonDocument doc;
+            JsonObject details = doc.to<JsonObject>();
+            details["soc"] = currentSoc;
+            
+            if (currentThreshold == 20) {
+                details["threshold"] = "20%";
+                Serial.println("[VEHICLE] Event: socThreshold (20%)");
+                emitEvent("socThreshold", &details);
+            } else if (currentThreshold == 40) {
+                details["threshold"] = "50%";
+                Serial.println("[VEHICLE] Event: socThreshold (50%)");
+                emitEvent("socThreshold", &details);
+            } else if (currentThreshold == 60) {
+                details["threshold"] = "80%";
+                Serial.println("[VEHICLE] Event: socThreshold (80%)");
+                emitEvent("socThreshold", &details);
+            } else if (currentThreshold >= 100) {
+                details["threshold"] = "100%";
+                Serial.println("[VEHICLE] Event: socThreshold (100%) / chargingComplete");
+                emitEvent("socThreshold", &details);
+                emitEvent("chargingComplete", &details);
+            }
+        }
+    }
+    eventLastSoc = currentSoc;
+    
+    // === Low Battery Event (below 20%) ===
+    if (state.battery.hasSoc() && currentSoc < 20 && eventLastSoc >= 20) {
+        JsonDocument doc;
+        JsonObject details = doc.to<JsonObject>();
+        details["soc"] = currentSoc;
+        Serial.println("[VEHICLE] Event: lowBattery");
+        emitEvent("lowBattery", &details);
     }
 }

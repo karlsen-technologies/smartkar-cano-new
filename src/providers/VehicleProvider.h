@@ -81,6 +81,13 @@ private:
     bool eventCharging = false;
     bool eventLocked = false;
     bool eventPlugged = false;
+    bool eventDriverDoorOpen = false;
+    bool eventPassengerDoorOpen = false;
+    bool eventRearLeftDoorOpen = false;
+    bool eventRearRightDoorOpen = false;
+    bool eventTrunkOpen = false;
+    bool eventClimateActive = false;
+    float eventLastSoc = 0.0f;  // For SOC threshold events
     bool eventsInitialized = false;
     
     // Thresholds for change detection

@@ -227,7 +227,8 @@ struct BatteryState {
 
 /**
  * Climate domain state
- * Consolidates data from CAN (Klima) and BAP (Climate Control)
+ * Consolidates data from CAN (Klima 0x66E) and BAP (Climate Control)
+ * Climate active status is BAP-only (CAN flags unreliable)
  */
 struct ClimateState {
     // === Interior Temperature (unified - CAN passive, BAP active) ===
@@ -239,27 +240,19 @@ struct ClimateState {
     float outsideTemp = 0.0f;           // Outside temperature (°C)
     unsigned long outsideTempUpdate = 0;
     
-    // === Standby Modes (CAN only 0x66E) ===
-    bool standbyHeatingActive = false;  // Standby heating (not controlled via BAP)
-    bool standbyVentActive = false;     // Standby ventilation
-    unsigned long standbyUpdate = 0;
-    
-    // === Active Climate Control (BAP) ===
-    bool climateActive = false;         // Active climate control running
-    bool heating = false;               // Heating mode
-    bool cooling = false;               // Cooling mode
-    bool ventilation = false;           // Ventilation mode
-    bool autoDefrost = false;           // Auto defrost enabled
-    uint16_t climateTimeMin = 0;        // Remaining time (minutes)
+    // === Climate Control (BAP-only - CAN flags unreliable) ===
+    bool climateActive = false;         // Climate control running (BAP only)
+    DataSource climateActiveSource = DataSource::NONE;  // Will always be BAP or NONE
+    bool heating = false;               // Heating mode (BAP only)
+    bool cooling = false;               // Cooling mode (BAP only)
+    bool ventilation = false;           // Ventilation mode (BAP only)
+    bool autoDefrost = false;           // Auto defrost enabled (BAP only)
+    uint16_t climateTimeMin = 0;        // Remaining time in minutes (BAP only)
     unsigned long climateActiveUpdate = 0;
     
     // Helper methods
     bool hasActiveClimate() const {
         return climateActive;
-    }
-    
-    bool hasStandbyMode() const {
-        return standbyHeatingActive || standbyVentActive;
     }
 };
 

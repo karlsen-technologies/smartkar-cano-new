@@ -50,8 +50,7 @@ public:
     
     float insideTemp() const { return vehicleState.climate.insideTemp; }
     float outsideTemp() const { return vehicleState.climate.outsideTemp; }
-    bool isStandbyHeatingActive() const { return vehicleState.climate.standbyHeatingActive; }
-    bool isStandbyVentActive() const { return vehicleState.climate.standbyVentActive; }
+    bool isClimateActive() const { return vehicleState.climate.climateActive; }
     
 private:
     VehicleState& vehicleState;

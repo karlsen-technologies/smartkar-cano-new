@@ -5,12 +5,22 @@
 VehicleManager::VehicleManager(CanManager *canMgr)
     : canManager(canMgr), bodyDomain(state, this), batteryDomain(state, this), driveDomain(state, this), climateDomain(state, this), gpsDomain(state, this), rangeDomain(state, this), batteryControlChannel(state, this), profileManager(this)
 {
+    // Create mutex for thread-safe state access (Core 0 CAN task + Core 1 main loop)
+    stateMutex = xSemaphoreCreateMutex();
+    if (stateMutex == nullptr) {
+        Serial.println("[VehicleManager] CRITICAL: Failed to create state mutex!");
+    }
+    
     // Register BAP channels with router
     bapRouter.registerChannel(&batteryControlChannel);
 }
 
 VehicleManager::~VehicleManager()
 {
+    if (stateMutex != nullptr) {
+        vSemaphoreDelete(stateMutex);
+        stateMutex = nullptr;
+    }
 }
 
 bool VehicleManager::setup()
@@ -53,22 +63,44 @@ void VehicleManager::loop()
 }
 
 // =============================================================================
-// State access (lock-free - may read slightly stale data)
+// State access (thread-safe via mutex)
 // =============================================================================
 
 VehicleState VehicleManager::getStateCopy()
 {
-    // Direct copy - CAN task may be updating, but individual fields are atomic
+    // Acquire mutex with 100ms timeout
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        VehicleState copy = state;
+        xSemaphoreGive(stateMutex);
+        return copy;
+    }
+    
+    // Timeout - return potentially stale data
+    Serial.println("[VehicleManager] WARNING: getStateCopy() mutex timeout, returning stale data");
     return state;
 }
 
 bool VehicleManager::isVehicleAwake()
 {
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        bool awake = state.isAwake();
+        xSemaphoreGive(stateMutex);
+        return awake;
+    }
+    
+    // Timeout - return potentially stale data
     return state.isAwake();
 }
 
 uint32_t VehicleManager::getFrameCount()
 {
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        uint32_t count = state.canFrameCount;
+        xSemaphoreGive(stateMutex);
+        return count;
+    }
+    
+    // Timeout - return potentially stale data
     return state.canFrameCount;
 }
 
@@ -78,6 +110,14 @@ uint32_t VehicleManager::getFrameCount()
 
 void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc, bool extended)
 {
+    // Acquire mutex with 10ms timeout (CAN task runs at high priority)
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        // Mutex timeout - skip this frame to avoid blocking CAN task
+        // This should be rare; indicates main loop is holding mutex too long
+        unhandledFrames++;
+        return;
+    }
+    
     // Count every frame
     state.markCanActivity();
 
@@ -100,6 +140,7 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc
         {
             unhandledFrames++;
         }
+        xSemaphoreGive(stateMutex);
         return;
     }
 
@@ -134,6 +175,8 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc
         unhandledFrames++;
         break;
     }
+    
+    xSemaphoreGive(stateMutex);
 }
 
 bool VehicleManager::sendCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc, bool extended)
@@ -277,8 +320,10 @@ void VehicleManager::logStatistics()
                   clim.insideTemp,
                   clim.insideTempSource == DataSource::BAP ? "BAP" : "CAN",
                   clim.outsideTemp);
-    Serial.printf("[VehicleManager] Standby heat:%d vent:%d (updated: %lu)\r\n",
-                  clim.standbyHeatingActive, clim.standbyVentActive, clim.standbyUpdate);
+    Serial.printf("[VehicleManager] Climate: %s (source:%s) heat:%d cool:%d vent:%d defrost:%d time:%dmin\r\n",
+                  clim.climateActive ? "ACTIVE" : "off",
+                  clim.climateActiveSource == DataSource::BAP ? "BAP" : "CAN",
+                  clim.heating, clim.cooling, clim.ventilation, clim.autoDefrost, clim.climateTimeMin);
 
     // GPS status
     const CanGpsState &gps = snapshot.gps;
@@ -339,11 +384,12 @@ void VehicleManager::logStatistics()
                       batt2.remainingTimeMin);
     }
     
-    if (clim2.climateActive)
+    // BAP Climate detail (only show when BAP is source)
+    if (clim2.climateActiveSource == DataSource::BAP && clim2.climateActive)
     {
-        Serial.printf("[VehicleManager] BAP Climate: %s (heat:%d cool:%d temp:%.1f°C time:%dmin)\r\n",
-                      clim2.climateActive ? "ACTIVE" : "off",
-                      clim2.heating, clim2.cooling, clim2.insideTemp, clim2.climateTimeMin);
+        Serial.printf("[VehicleManager] BAP Climate Detail: heat:%d cool:%d vent:%d defrost:%d temp:%.1f°C time:%dmin\r\n",
+                      clim2.heating, clim2.cooling, clim2.ventilation, clim2.autoDefrost,
+                      clim2.insideTemp, clim2.climateTimeMin);
     }
 
     Serial.println("[VehicleManager] ======================");
@@ -362,7 +408,14 @@ bool VehicleManager::requestWake() {
     }
     
     // If vehicle already awake (via CAN activity), skip wake sequence
-    if (state.isAwake()) {
+    // Thread-safe check with mutex
+    bool vehicleAwake = false;
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        vehicleAwake = state.isAwake();
+        xSemaphoreGive(stateMutex);
+    }
+    
+    if (vehicleAwake) {
         Serial.println("[VehicleManager] Vehicle already awake (CAN active)");
         setWakeState(WakeState::AWAKE);
         startKeepAlive();
@@ -396,8 +449,12 @@ void VehicleManager::updateWakeStateMachine() {
     unsigned long now = millis();
     unsigned long elapsed = now - wakeStateStartTime;
     
-    // Always track vehicle state based on CAN activity
-    bool vehicleHasCanActivity = state.isAwake();
+    // Always track vehicle state based on CAN activity (thread-safe read)
+    bool vehicleHasCanActivity = false;
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        vehicleHasCanActivity = state.isAwake();
+        xSemaphoreGive(stateMutex);
+    }
     
     // Update keep-alive management
     if (keepAliveActive) {

@@ -170,8 +170,9 @@ private:
     CanManager* canManager;
     
     // Vehicle state (written by CAN task on Core 0, read by main loop on Core 1)
-    // No mutex - CAN task has priority, main loop reads may see stale data
+    // Protected by mutex for thread-safe access across cores
     VehicleState state;
+    SemaphoreHandle_t stateMutex = nullptr;  // FreeRTOS mutex for thread-safe state access
     
     // Domains
     BodyDomain bodyDomain;

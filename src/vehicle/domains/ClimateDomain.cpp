@@ -32,7 +32,9 @@ bool ClimateDomain::processFrame(uint32_t canId, const uint8_t* data, uint8_t dl
 }
 
 void ClimateDomain::processKlima03(const uint8_t* data) {
-    // Klima_03 (0x66E) - Climate status and inside temperature
+    // Klima_03 (0x66E) - Inside temperature only
+    // Note: CAN climate active status (KL_STH_aktiv/KL_STL_aktiv) is unreliable
+    // Climate active status is BAP-only - ignore CAN flags
     BroadcastDecoder::KlimaData decoded = BroadcastDecoder::decodeKlima03(data);
     
     ClimateState& climate = vehicleState.climate;
@@ -45,11 +47,6 @@ void ClimateDomain::processKlima03(const uint8_t* data) {
         climate.insideTempSource = DataSource::CAN_STD;
         climate.insideTempUpdate = millis();
     }
-    
-    // Update standby modes (CAN only - not controlled via BAP)
-    climate.standbyHeatingActive = decoded.standbyHeatingActive;
-    climate.standbyVentActive = decoded.standbyVentActive;
-    climate.standbyUpdate = millis();
     
     // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }

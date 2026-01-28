@@ -118,8 +118,9 @@ void BatteryControlChannel::processClimateState(const uint8_t* payload, uint8_t 
     
     ClimateState& climate = state.climate;
     
-    // Update unified climate fields (BAP source for active climate control)
+    // Update unified climate fields (BAP source - provides detailed mode info)
     climate.climateActive = decoded.climateActive;
+    climate.climateActiveSource = DataSource::BAP;
     climate.heating = decoded.heating;
     climate.cooling = decoded.cooling;
     climate.ventilation = decoded.ventilation;

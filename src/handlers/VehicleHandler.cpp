@@ -269,8 +269,9 @@ CommandResult VehicleHandler::handleGetState(CommandContext& ctx) {
     climate["active"] = state.climate.climateActive;
     climate["heating"] = state.climate.heating;
     climate["cooling"] = state.climate.cooling;
-    climate["standbyHeating"] = state.climate.standbyHeatingActive;
-    climate["standbyVent"] = state.climate.standbyVentActive;
+    climate["ventilation"] = state.climate.ventilation;
+    climate["autoDefrost"] = state.climate.autoDefrost;
+    climate["remainingMin"] = state.climate.climateTimeMin;
     
     // Meta info
     result.data["vehicleAwake"] = state.isAwake();
