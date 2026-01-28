@@ -176,93 +176,6 @@ Requests the device to enter deep sleep.
 
 ---
 
-#### system.wakeup
-
-Acknowledges that the device is awake. No-op command that confirms the device received the wakeup signal.
-
-```json
-{"type":"command","data":{"id":3,"action":"system.wakeup"}}
-```
-
-**Response:**
-```json
-{"type":"response","data":{"id":3,"ok":true,"message":"Device is awake","uptime":1234}}
-```
-
----
-
-#### system.telemetry
-
-Forces immediate telemetry collection and send.
-
-```json
-{"type":"command","data":{"id":4,"action":"system.telemetry"}}
-```
-
-**Response:**
-```json
-{"type":"response","data":{"id":4,"ok":true,"message":"Telemetry collected"}}
-```
-
-**Note:** The state will be sent as a separate `state` message.
-
----
-
-#### system.info
-
-Returns detailed device information.
-
-```json
-{"type":"command","data":{"id":5,"action":"system.info"}}
-```
-
-**Response:**
-```json
-{
-  "type":"response",
-  "data":{
-    "id":5,
-    "ok":true,
-    "chipModel":"ESP32-S3",
-    "chipRevision":0,
-    "chipCores":2,
-    "cpuFreqMHz":240,
-    "freeHeap":245760,
-    "minFreeHeap":234500,
-    "heapSize":327680,
-    "flashSize":16777216,
-    "flashSpeed":80000000,
-    "sdkVersion":"v4.4.6",
-    "uptime":125340
-  }
-}
-```
-
----
-
-### Vehicle Domain
-
-#### vehicle.wake
-
-Wakes the vehicle CAN bus and initializes BAP communication.
-
-```json
-{"type":"command","data":{"id":10,"action":"vehicle.wake"}}
-```
-
-**Response:**
-```json
-{"type":"response","data":{"id":10,"ok":true,"message":"Wake requested"}}
-```
-
-**Behavior:** 
-- Sends wake frame (0x17330301) to vehicle
-- Sends BAP init frame (0x1B000067)
-- Starts 500ms keep-alive heartbeat
-- Returns immediately (check `vehicleAwake` in next state message to confirm)
-
----
-
 #### vehicle.getState
 
 Returns current vehicle state snapshot.
@@ -298,28 +211,30 @@ See [Vehicle State Structure](#vehicle-state-structure) for complete field listi
 Starts or updates charging session with specified profile.
 
 ```json
-{"type":"command","data":{"id":12,"action":"vehicle.startCharging","targetSoc":80,"maxAmps":16}}
+{"type":"command","data":{"id":12,"action":"vehicle.startCharging","targetSoc":80,"maxCurrent":16}}
 ```
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `targetSoc` | integer | No | Target SOC % (50-100, default 100) |
-| `maxAmps` | integer | No | Max charging current (6-32A, default 32) |
+| `targetSoc` | integer | No | Target SOC % (0-100, default 80) |
+| `maxCurrent` | integer | No | Max charging current in Amps (0-32A, default 32) |
 
 **Response (Immediate):**
 ```json
-{"type":"response","data":{"id":12,"ok":false,"status":"pending"}}
+{"type":"response","data":{"id":12,"ok":true,"targetSoc":80,"maxCurrent":16,"status":"queued"}}
 ```
 
 **Event (When Complete):**
 ```json
-{"type":"event","data":{"domain":"vehicle","name":"commandCompleted","action":"startCharging"}}
+{"type":"event","data":{"domain":"vehicle","name":"chargingStartRequested","targetSoc":80,"maxCurrent":16}}
 ```
 
 **Or on failure:**
 ```json
-{"type":"event","data":{"domain":"vehicle","name":"commandFailed","action":"startCharging","error":"Not plugged in"}}
+{"type":"response","data":{"id":12,"ok":false,"status":"error","error":"Vehicle is not plugged in"}}
 ```
+
+**Note:** Returns immediately. Command is queued and executed asynchronously. Requires vehicle to be plugged in.
 
 ---
 
@@ -333,10 +248,15 @@ Stops the current charging session.
 
 **Response:**
 ```json
-{"type":"response","data":{"id":13,"ok":false,"status":"pending"}}
+{"type":"response","data":{"id":13,"ok":true,"status":"queued"}}
 ```
 
-See `vehicle.startCharging` for event responses.
+**Event:**
+```json
+{"type":"event","data":{"domain":"vehicle","name":"chargingStopRequested"}}
+```
+
+**Note:** Returns immediately with status "queued". Command is executed asynchronously.
 
 ---
 
@@ -345,15 +265,25 @@ See `vehicle.startCharging` for event responses.
 Starts climate control (heating/cooling/ventilation).
 
 ```json
-{"type":"command","data":{"id":14,"action":"vehicle.startClimate"}}
+{"type":"command","data":{"id":14,"action":"vehicle.startClimate","temperature":21.0,"allowBattery":true}}
 ```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `temperature` (or `temp`) | float | No | Target temperature in °C (15.5-30.0, default 21.0) |
+| `allowBattery` | boolean | No | Allow climate on battery power (default: true) |
 
 **Response:**
 ```json
-{"type":"response","data":{"id":14,"ok":false,"status":"pending"}}
+{"type":"response","data":{"id":14,"ok":true,"temperature":21.0,"allowBattery":true,"status":"queued"}}
 ```
 
-**Note:** Temperature and mode are controlled by vehicle settings, not API parameters.
+**Event:**
+```json
+{"type":"event","data":{"domain":"vehicle","name":"climateStartRequested","temperature":21.0,"allowBattery":true}}
+```
+
+**Note:** Returns immediately with status "queued". Watch for events to confirm actual start/failure.
 
 ---
 
@@ -367,84 +297,162 @@ Stops climate control.
 
 **Response:**
 ```json
-{"type":"response","data":{"id":15,"ok":false,"status":"pending"}}
+{"type":"response","data":{"id":15,"ok":true,"status":"queued"}}
 ```
+
+**Event:**
+```json
+{"type":"event","data":{"domain":"vehicle","name":"climateStopRequested"}}
+```
+
+**Note:** Returns immediately with status "queued". Command is executed asynchronously.
 
 ---
 
-#### vehicle.startChargingAndClimate
+#### vehicle.requestState
 
-Starts both charging and climate control simultaneously (efficient combo command).
+Requests fresh BAP state data from the vehicle (plug, charge, climate).
 
 ```json
-{"type":"command","data":{"id":16,"action":"vehicle.startChargingAndClimate","targetSoc":80,"maxAmps":16}}
+{"type":"command","data":{"id":16,"action":"vehicle.requestState"}}
 ```
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `targetSoc` | integer | No | Target SOC % (50-100, default 100) |
-| `maxAmps` | integer | No | Max charging current (6-32A, default 32) |
 
 **Response:**
 ```json
-{"type":"response","data":{"id":16,"ok":false,"status":"pending"}}
+{"type":"response","data":{"id":16,"ok":true,"plugRequested":true,"chargeRequested":true,"climateRequested":true}}
 ```
+
+**Note:** Triggers BAP state requests. Updated data will arrive in subsequent state messages.
 
 ---
 
 ### Charging Profile Domain
 
-#### chargingProfile.setProfile
+#### chargingProfile.updateProfile
 
-Sets charging profile timers (3 profiles supported).
+Updates charging profile settings for timer profiles (1-3 only).
 
 ```json
 {
   "type":"command",
   "data":{
     "id":20,
-    "action":"chargingProfile.setProfile",
-    "profile":1,
-    "enabled":true,
-    "startHour":22,
-    "startMinute":0,
-    "endHour":6,
-    "endMinute":30,
+    "action":"chargingProfile.updateProfile",
+    "index":1,
     "targetSoc":80,
-    "maxAmps":16,
-    "climateEnabled":true
+    "maxCurrent":16,
+    "temperature":22.0,
+    "enableCharging":true,
+    "enableClimate":true,
+    "allowBattery":false,
+    "leadTime":0,
+    "holdTimePlug":60,
+    "holdTimeBattery":30,
+    "name":"Night charging"
   }
 }
 ```
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `profile` | integer | Yes | Profile number (1-3) |
-| `enabled` | boolean | No | Enable this profile (default: true) |
-| `startHour` | integer | Yes | Start time hour (0-23) |
-| `startMinute` | integer | Yes | Start time minute (0-59) |
-| `endHour` | integer | Yes | End time hour (0-23) |
-| `endMinute` | integer | Yes | End time minute (0-59) |
-| `targetSoc` | integer | No | Target SOC % (50-100, default 100) |
-| `maxAmps` | integer | No | Max charging current (6-32A, default 32) |
-| `climateEnabled` | boolean | No | Also start climate (default: false) |
+| `index` | integer | Yes | Profile index (1-3, timer profiles only) |
+| `targetSoc` | integer | No | Target SOC % (0-100) |
+| `maxCurrent` | integer | No | Max charging current (0-32A) |
+| `temperature` | float | No | Climate target temperature (15.5-30.0°C) |
+| `enableCharging` | boolean | No | Enable charging for this profile |
+| `enableClimate` | boolean | No | Enable climate for this profile |
+| `allowBattery` | boolean | No | Allow climate on battery (used when enableClimate=true) |
+| `leadTime` | integer | No | Lead time in minutes |
+| `holdTimePlug` | integer | No | Holding time when plugged (minutes) |
+| `holdTimeBattery` | integer | No | Holding time on battery (minutes) |
+| `name` | string | No | Profile name (max 20 chars) |
 
 **Response:**
 ```json
-{"type":"response","data":{"id":20,"ok":true,"message":"Profile 1 updated"}}
+{
+  "type":"response",
+  "data":{
+    "id":20,
+    "ok":true,
+    "message":"Profile updated",
+    "profile":{
+      "index":1,
+      "valid":true,
+      "chargingEnabled":true,
+      "climateEnabled":true,
+      "maxCurrent":16,
+      "targetChargeLevel":80,
+      "temperature":22.0,
+      "name":"Night charging"
+    }
+  }
+}
 ```
 
-**Note:** Profiles are stored in device NVS. Time-based execution happens locally on device.
+**Event:**
+```json
+{"type":"event","data":{"domain":"profiles","name":"profileUpdated","index":1}}
+```
+
+**Note:** Profiles are stored locally and sent to the vehicle. Profile 0 (immediate) cannot be updated via this command.
+
+---
+
+#### chargingProfile.setEnabled
+
+Enables or disables a timer profile (1-3 only).
+
+```json
+{"type":"command","data":{"id":23,"action":"chargingProfile.setEnabled","index":1,"enabled":true}}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `index` | integer | Yes | Profile index (1-3, timer profiles only) |
+| `enabled` | boolean | Yes | Enable (true) or disable (false) the timer |
+
+**Response:**
+```json
+{"type":"response","data":{"id":23,"ok":true,"message":"Timer enabled","index":1,"enabled":true}}
+```
+
+**Event:**
+```json
+{"type":"event","data":{"domain":"profiles","name":"timerStateChanged","index":1,"enabled":true}}
+```
+
+**Note:** This enables/disables the timer activation. The profile settings are preserved.
+
+---
+
+#### chargingProfile.refresh
+
+Requests all profiles to be refreshed from the vehicle.
+
+```json
+{"type":"command","data":{"id":24,"action":"chargingProfile.refresh"}}
+```
+
+**Response:**
+```json
+{"type":"response","data":{"id":24,"ok":true,"message":"Profile refresh requested"}}
+```
+
+**Note:** Triggers BAP requests to fetch all profile data from the vehicle. Updated profiles will be reflected in subsequent state or profile queries.
 
 ---
 
 #### chargingProfile.getProfile
 
-Gets a specific charging profile.
+Gets a specific charging profile by index.
 
 ```json
-{"type":"command","data":{"id":21,"action":"chargingProfile.getProfile","profile":1}}
+{"type":"command","data":{"id":21,"action":"chargingProfile.getProfile","index":1}}
 ```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `index` | integer | Yes | Profile index (0-3) |
 
 **Response:**
 ```json
@@ -453,27 +461,39 @@ Gets a specific charging profile.
   "data":{
     "id":21,
     "ok":true,
-    "profile":1,
-    "enabled":true,
-    "startHour":22,
-    "startMinute":0,
-    "endHour":6,
-    "endMinute":30,
-    "targetSoc":80,
-    "maxAmps":16,
-    "climateEnabled":true
+    "profile":{
+      "index":1,
+      "type":"timer",
+      "description":"Timer 1",
+      "valid":true,
+      "lastUpdate":123456789,
+      "operation":3,
+      "operation2":0,
+      "chargingEnabled":true,
+      "climateEnabled":true,
+      "climateAllowBattery":false,
+      "maxCurrent":16,
+      "minChargeLevel":50,
+      "targetChargeLevel":80,
+      "temperature":22.0,
+      "temperatureUnit":"celsius",
+      "leadTime":0,
+      "holdTimePlug":60,
+      "holdTimeBattery":30,
+      "name":"Night charging"
+    }
   }
 }
 ```
 
 ---
 
-#### chargingProfile.getAllProfiles
+#### chargingProfile.get
 
-Gets all 3 charging profiles.
+Gets all charging profiles (0-3).
 
 ```json
-{"type":"command","data":{"id":22,"action":"chargingProfile.getAllProfiles"}}
+{"type":"command","data":{"id":22,"action":"chargingProfile.get"}}
 ```
 
 **Response:**
@@ -483,14 +503,42 @@ Gets all 3 charging profiles.
   "data":{
     "id":22,
     "ok":true,
+    "profileCount":4,
+    "lastUpdateTime":123456789,
+    "updateCount":5,
     "profiles":[
-      {"profile":1,"enabled":true,...},
-      {"profile":2,"enabled":false,...},
-      {"profile":3,"enabled":true,...}
+      {
+        "index":0,
+        "type":"immediate",
+        "description":"Used for 'start now' operations",
+        "valid":true,
+        "chargingEnabled":true,
+        "climateEnabled":false,
+        "maxCurrent":32,
+        "targetChargeLevel":80,
+        "temperature":21.0
+      },
+      {
+        "index":1,
+        "type":"timer",
+        "description":"Timer 1",
+        "valid":true,
+        "chargingEnabled":true,
+        "climateEnabled":true,
+        "climateAllowBattery":false,
+        "maxCurrent":16,
+        "targetChargeLevel":80,
+        "temperature":22.0,
+        "name":"Night charging"
+      },
+      {"index":2,"valid":false},
+      {"index":3,"valid":false}
     ]
   }
 }
 ```
+
+**Note:** Profile 0 is the immediate profile used for "start now" commands. Profiles 1-3 are timer profiles.
 
 ---
 

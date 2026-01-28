@@ -1,4 +1,5 @@
 #include "BapProtocol.h"
+#include "../VehicleManager.h"
 
 namespace BapProtocol {
 

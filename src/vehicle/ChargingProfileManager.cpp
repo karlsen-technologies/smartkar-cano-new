@@ -5,12 +5,12 @@ using namespace ChargingProfile;
 using namespace BapProtocol;
 
 // =============================================================================
-// Battery Control Constants (Device 0x25)
+// BAP Constants (TODO: Move to BatteryControlChannel)
 // =============================================================================
 
 namespace {
     constexpr uint8_t DEVICE_BATTERY_CONTROL = 0x25;
-    constexpr uint32_t CAN_ID_BATTERY_TX = 0x17332501;  // Commands TO battery control
+    constexpr uint32_t CAN_ID_BATTERY_TX = 0x17332501;
     
     namespace Function {
         constexpr uint8_t OPERATION_MODE = 0x18;
@@ -59,61 +59,45 @@ bool ChargingProfileManager::isProfileValid(uint8_t index) const {
 }
 
 // =============================================================================
-// High-Level Operations (Profile 0)
+// Profile Data Management
 // =============================================================================
 
-bool ChargingProfileManager::startClimateNow(float tempCelsius, bool allowBattery) {
-    Serial.printf("[ProfileMgr] Start climate request: %.1f°C (battery=%s)\r\n", 
-                  tempCelsius, allowBattery ? "yes" : "no");
+void ChargingProfileManager::updateProfileLocal(uint8_t profileIndex, const Profile& profile) {
+    if (profileIndex >= PROFILE_COUNT) {
+        Serial.printf("[ProfileMgr] Invalid profile index %d\r\n", profileIndex);
+        return;
+    }
     
-    // Update profile 0's temperature setting locally
-    profiles[PROFILE_IMMEDIATE].setTemperature(tempCelsius);
+    profiles[profileIndex] = profile;
+    profiles[profileIndex].valid = true;
+    profiles[profileIndex].lastUpdate = millis();
     
-    // Delegate to BatteryControlChannel (non-blocking)
-    return manager->batteryControl().startClimate(tempCelsius, allowBattery);
+    Serial.printf("[ProfileMgr] Updated profile %d locally\r\n", profileIndex);
 }
 
-bool ChargingProfileManager::stopClimateNow() {
-    Serial.println("[ProfileMgr] Stop climate request");
-    
-    // Delegate to BatteryControlChannel (non-blocking)
-    return manager->batteryControl().stopClimate();
-}
-
-bool ChargingProfileManager::startChargingNow(uint8_t targetSoc, uint8_t maxCurrent) {
-    Serial.printf("[ProfileMgr] Start charging request: target=%d%%, max=%dA\r\n", 
-                  targetSoc, maxCurrent);
-    
-    // Delegate to BatteryControlChannel (non-blocking)
-    return manager->batteryControl().startCharging(targetSoc, maxCurrent);
-}
-
-bool ChargingProfileManager::stopChargingNow() {
-    Serial.println("[ProfileMgr] Stop charging request");
-    
-    // Delegate to BatteryControlChannel (non-blocking)
-    return manager->batteryControl().stopCharging();
-}
-
-bool ChargingProfileManager::startChargingAndClimateNow(float tempCelsius, 
-                                                         uint8_t targetSoc,
-                                                         bool allowClimateOnBattery) {
-    Serial.printf("[ProfileMgr] Start charging+climate request: temp=%.1f, soc=%d%%\r\n",
-                  tempCelsius, targetSoc);
-    
-    // Update profile 0's temperature setting locally
-    profiles[PROFILE_IMMEDIATE].setTemperature(tempCelsius);
-    
-    // Use the new combined command
-    return manager->batteryControl().startChargingAndClimate(tempCelsius, targetSoc, 32, allowClimateOnBattery);
+void ChargingProfileManager::clearAllProfiles() {
+    for (uint8_t i = 0; i < PROFILE_COUNT; i++) {
+        profiles[i].clear();
+    }
+    Serial.println("[ProfileMgr] All profiles cleared");
 }
 
 // =============================================================================
-// Profile Management
+// BAP Request Methods (TODO: Move to BatteryControlChannel)
 // =============================================================================
 
-bool ChargingProfileManager::updateTimerProfile(uint8_t profileIndex, 
-                                                 const Profile& profile) {
+bool ChargingProfileManager::requestAllProfiles() {
+    uint8_t frame[8];
+    
+    // Build GET request for ProfilesArray
+    encodeShortMessage(frame, OpCode::GET, DEVICE_BATTERY_CONTROL,
+                      Function::PROFILES_ARRAY, nullptr, 0);
+    
+    Serial.println("[ProfileMgr] Requesting all profiles...");
+    return manager->sendCanFrame(CAN_ID_BATTERY_TX, frame, 8, true);
+}
+
+bool ChargingProfileManager::updateTimerProfile(uint8_t profileIndex, const Profile& profile) {
     if (profileIndex < 1 || profileIndex > 3) {
         Serial.println("[ProfileMgr] Invalid profile index for timer (must be 1-3)");
         return false;
@@ -125,8 +109,8 @@ bool ChargingProfileManager::updateTimerProfile(uint8_t profileIndex,
     profiles[profileIndex].lastUpdate = millis();
     
     // TODO: Send full profile update to car via BAP
-    // This requires building a longer BAP message with full profile data
-    Serial.printf("[ProfileMgr] TODO: Send full profile %d update\r\n", profileIndex);
+    // This requires building a longer BAP message with full profile data (RecordAddr=0)
+    Serial.printf("[ProfileMgr] TODO: Send full profile %d update to vehicle\r\n", profileIndex);
     
     return true;
 }
@@ -137,33 +121,18 @@ bool ChargingProfileManager::setTimerProfileEnabled(uint8_t profileIndex, bool e
         return false;
     }
     
-    // The timer enable is controlled via the OPERATION_MODE function
-    // Each timer has its own bit in the payload
+    // Build OPERATION_MODE command to enable/disable timer
     uint8_t frame[8];
-    
-    // Payload byte 1: timer bitmask
-    // Bit 0: Profile 0 (immediately)
-    // Bit 1: Profile 1 (Timer 1)
-    // Bit 2: Profile 2 (Timer 2)
-    // Bit 3: Profile 3 (Timer 3)
     uint8_t timerBit = enable ? static_cast<uint8_t>(1 << profileIndex) : 0x00;
     uint8_t payload[2] = { 0x00, timerBit };
     
     encodeShortMessage(frame, OpCode::SET_GET, DEVICE_BATTERY_CONTROL,
-                       Function::OPERATION_MODE, payload, 2);
+                      Function::OPERATION_MODE, payload, 2);
     
     Serial.printf("[ProfileMgr] %s timer profile %d\r\n", 
                   enable ? "Enabling" : "Disabling", profileIndex);
     
-    return sendFrame(frame, 8);
-}
-
-bool ChargingProfileManager::requestAllProfiles() {
-    uint8_t frame[8];
-    buildProfilesRequest(frame);
-    
-    Serial.println("[ProfileMgr] Requesting all profiles...");
-    return sendFrame(frame, 8);
+    return manager->sendCanFrame(CAN_ID_BATTERY_TX, frame, 8, true);
 }
 
 // =============================================================================
@@ -171,29 +140,36 @@ bool ChargingProfileManager::requestAllProfiles() {
 // =============================================================================
 
 void ChargingProfileManager::processProfilesArray(const uint8_t* payload, uint8_t len) {
-    if (len < 4) {
+    if (len < 5) {
         Serial.println("[ProfileMgr] ProfilesArray payload too short");
         return;
     }
     
-    // Parse BAP array header
-    // Byte 0: [ASG-ID:4][Transaction-ID:4]
-    // Byte 1: [LargeIdx:1][PosTransmit:1][Backward:1][Shift:1][RecordAddr:4]
-    // Byte 2: startIndex
-    // Byte 3: elementCount
+    // Parse BAP array header (STATUS format from FSG)
+    // STATUS header (5+ bytes):
+    //   Byte 0: [ASG-ID:4][Transaction-ID:4]
+    //   Byte 1: totalElementsInList
+    //   Byte 2: [LargeIdx:1][PosTransmit:1][Backward:1][Shift:1][RecordAddr:4]
+    //   Byte 3: startIndex (or bytes 3-4 if LargeIdx=1)
+    //   Byte 4: elementCount (or bytes 5-6 if LargeIdx=1)
+    //
+    // Note: We receive STATUS responses, not GET requests!
     
-    uint8_t headerByte1 = payload[1];
-    uint8_t recordAddr = headerByte1 & 0x0F;
-    bool posTransmit = (headerByte1 & ArrayHeader::POS_TRANSMIT) != 0;
-    uint8_t startIndex = payload[2];
-    uint8_t elementCount = payload[3];
+    uint8_t totalElements = payload[1];
+    uint8_t headerByte2 = payload[2];
+    uint8_t recordAddr = headerByte2 & 0x0F;
+    bool posTransmit = (headerByte2 & ArrayHeader::POS_TRANSMIT) != 0;
+    bool largeIdx = (headerByte2 & ArrayHeader::LARGE_IDX) != 0;
+    uint8_t startIndex = payload[3];
+    uint8_t elementCount = payload[4];
     
-    Serial.printf("[ProfileMgr] ProfilesArray: recordAddr=%d, start=%d, count=%d, posTransmit=%d\r\n",
-                  recordAddr, startIndex, elementCount, posTransmit);
+    Serial.printf("[ProfileMgr] ProfilesArray: total=%d, recordAddr=%d, start=%d, count=%d, posTransmit=%d\r\n",
+                  totalElements, recordAddr, startIndex, elementCount, posTransmit);
     
-    // Skip header bytes
-    const uint8_t* profileData = payload + 4;
-    uint8_t remainingLen = len - 4;
+    // Skip header bytes (5 bytes for STATUS format, or more if LargeIdx=1)
+    uint8_t headerSize = largeIdx ? 7 : 5;  // 16-bit indexes use 2 more bytes
+    const uint8_t* profileData = payload + headerSize;
+    uint8_t remainingLen = len - headerSize;
     
     // Parse based on record address format
     if (recordAddr == ArrayHeader::RECORD_ADDR_COMPACT) {
@@ -237,100 +213,6 @@ void ChargingProfileManager::processProfilesArray(const uint8_t* payload, uint8_
 }
 
 // =============================================================================
-// Command Building
-// =============================================================================
-
-uint8_t ChargingProfileManager::buildProfile0Config(uint8_t* startFrame, uint8_t* contFrame,
-                                                     uint8_t mode, uint8_t maxCurrent, 
-                                                     uint8_t targetSoc) {
-    // Build the 2-frame profile configuration sequence
-    // 
-    // This updates Profile 0 using RecordAddress=6 (compact format)
-    //
-    // From trace analysis (start_climate.csv):
-    // Frame 1: 80 08 29 59 22 06 00 01
-    //   80 = Long message start, group 0
-    //   08 = Total length (8 bytes: 2 BAP header + 6 payload)
-    //   29 59 = BAP header: OpCode=SetGet(2), Device=0x25, Function=0x19
-    //   22 = Array header byte 1: PosTransmit=1, RecordAddr=6
-    //   06 = startIndex (profile 0 encoded? or part of header?)
-    //   00 = elementCount
-    //   01 = first byte of profile position marker
-    //
-    // Frame 2: C0 06 00 20 00 00 00 00
-    //   C0 = Continuation, group 0, index 0
-    //   06 = operation mode (climate+battery = 0x06)
-    //   00 = operation2
-    //   20 = maxCurrent (32A = 0x20)
-    //   00 = targetSoc (0% for climate-only)
-    
-    // The payload for compact profile update:
-    // [arrayHeader0][arrayHeader1][startIndex][elementCount][posMarker][op][op2][maxA][soc]
-    
-    uint8_t arrayHeader0 = 0x22;  // Some ASG/Transaction ID
-    uint8_t arrayHeader1 = ArrayHeader::POS_TRANSMIT | ArrayHeader::RECORD_ADDR_COMPACT;  // 0x46
-    
-    // Actually looking at the trace, byte values are:
-    // 22 06 00 01 | 06 00 20 00
-    // Let me match the exact trace format for now:
-    
-    uint8_t payload[8] = {
-        0x22,           // Array header byte 0 (from trace)
-        0x06,           // Array header byte 1: RecordAddr=6
-        0x00,           // startIndex or padding
-        0x01,           // elementCount or position marker
-        mode,           // operation mode
-        0x00,           // operation2
-        maxCurrent,     // max charging current  
-        targetSoc       // target SOC
-    };
-    
-    // Encode long message start frame
-    // Note: We're sending 8 bytes of payload
-    encodeLongStart(startFrame, OpCode::SET_GET, DEVICE_BATTERY_CONTROL,
-                    Function::PROFILES_ARRAY, 8, payload, 0);
-    
-    // Continuation frame gets the remaining 4 bytes
-    // Start frame carries first 4 bytes of payload in bytes 4-7
-    // So continuation gets payload[4:7]
-    uint8_t contPayload[7] = {
-        mode,           // operation mode
-        0x00,           // operation2
-        maxCurrent,     // max current
-        targetSoc,      // target soc
-        0x00, 0x00, 0x00  // padding
-    };
-    
-    encodeLongContinuation(contFrame, contPayload, 7, 0, 0);
-    
-    return 2;  // Always 2 frames
-}
-
-uint8_t ChargingProfileManager::buildOperationStart(uint8_t* frame) {
-    // Short BAP message to OPERATION_MODE (0x18)
-    // Payload: [0x00, 0x01] = immediately active
-    uint8_t payload[2] = { 0x00, 0x01 };
-    
-    return encodeShortMessage(frame, OpCode::SET_GET, DEVICE_BATTERY_CONTROL,
-                              Function::OPERATION_MODE, payload, 2);
-}
-
-uint8_t ChargingProfileManager::buildOperationStop(uint8_t* frame) {
-    // Short BAP message to OPERATION_MODE (0x18)
-    // Payload: [0x00, 0x00] = immediately off
-    uint8_t payload[2] = { 0x00, 0x00 };
-    
-    return encodeShortMessage(frame, OpCode::SET_GET, DEVICE_BATTERY_CONTROL,
-                              Function::OPERATION_MODE, payload, 2);
-}
-
-uint8_t ChargingProfileManager::buildProfilesRequest(uint8_t* frame) {
-    // GET request for ProfilesArray (function 0x19)
-    return encodeShortMessage(frame, OpCode::GET, DEVICE_BATTERY_CONTROL,
-                              Function::PROFILES_ARRAY, nullptr, 0);
-}
-
-// =============================================================================
 // Internal Methods
 // =============================================================================
 
@@ -369,11 +251,16 @@ bool ChargingProfileManager::parseFullProfile(uint8_t profileIndex,
         }
     }
     
+    // Full profile received - mark as valid for read-modify-write workflow
     p.valid = true;
     p.lastUpdate = millis();
     
-    Serial.printf("[ProfileMgr] Parsed profile %d: mode=0x%02X, temp=%.1f, soc=%d%%\r\n",
-                  profileIndex, p.operation, p.getTemperature(), p.targetChargeLevel);
+    Serial.printf("[ProfileMgr] Profile %d: op=0x%02X, temp=%.1fC, soc=%d%%, maxA=%d",
+                  profileIndex, p.operation, p.getTemperature(), p.targetChargeLevel, p.maxCurrent);
+    if (p.nameLength > 0) {
+        Serial.printf(", name='%s'", p.name);
+    }
+    Serial.println(" [VALID]");
     
     return true;
 }
@@ -391,73 +278,286 @@ bool ChargingProfileManager::parseCompactProfile(uint8_t profileIndex,
     p.maxCurrent = data[2];
     p.targetChargeLevel = data[3];
     
-    p.valid = true;
+    // Compact updates do NOT set valid flag - we need full profile for that
+    // p.valid = false;  // Don't change valid state
     p.lastUpdate = millis();
     
-    Serial.printf("[ProfileMgr] Parsed compact profile %d: mode=0x%02X, maxA=%d, soc=%d%%\r\n",
-                  profileIndex, p.operation, p.maxCurrent, p.targetChargeLevel);
+    Serial.printf("[ProfileMgr] Profile %d: op=0x%02X, soc=%d%%, maxA=%d [compact]\r\n",
+                  profileIndex, p.operation, p.targetChargeLevel, p.maxCurrent);
     
     return true;
 }
 
-bool ChargingProfileManager::sendFrame(const uint8_t* data, uint8_t len) {
-    if (!manager) {
-        Serial.println("[ProfileMgr] No manager - cannot send");
-        return false;
-    }
-    
-    return manager->sendCanFrame(CAN_ID_BATTERY_TX, data, len, true);
+// =============================================================================
+// Profile Update Loop and State Management
+// =============================================================================
+
+void ChargingProfileManager::loop() {
+    updateStateMachine();
 }
 
-bool ChargingProfileManager::sendProfileConfig(uint8_t mode, uint8_t maxCurrent, 
-                                                uint8_t targetSoc) {
-    uint8_t startFrame[8];
-    uint8_t contFrame[8];
-    
-    buildProfile0Config(startFrame, contFrame, mode, maxCurrent, targetSoc);
-    
-    // Debug output
-    Serial.printf("[ProfileMgr] Sending profile config: mode=0x%02X, maxA=%d, soc=%d\r\n",
-                  mode, maxCurrent, targetSoc);
-    Serial.printf("[ProfileMgr] Frame1: %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
-                  startFrame[0], startFrame[1], startFrame[2], startFrame[3],
-                  startFrame[4], startFrame[5], startFrame[6], startFrame[7]);
-    Serial.printf("[ProfileMgr] Frame2: %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
-                  contFrame[0], contFrame[1], contFrame[2], contFrame[3],
-                  contFrame[4], contFrame[5], contFrame[6], contFrame[7]);
-    
-    // Send start frame
-    if (!sendFrame(startFrame, 8)) {
-        Serial.println("[ProfileMgr] Failed to send start frame");
-        return false;
+const char* ChargingProfileManager::getUpdateStateName() const {
+    switch (updateState) {
+        case ProfileUpdateState::IDLE: return "IDLE";
+        case ProfileUpdateState::READING_PROFILE: return "READING_PROFILE";
+        case ProfileUpdateState::UPDATING_PROFILE: return "UPDATING_PROFILE";
+        case ProfileUpdateState::UPDATE_COMPLETE: return "UPDATE_COMPLETE";
+        case ProfileUpdateState::UPDATE_FAILED: return "UPDATE_FAILED";
+        default: return "UNKNOWN";
     }
-    
-    // Small delay between frames
-    delay(10);
-    
-    // Send continuation frame
-    if (!sendFrame(contFrame, 8)) {
-        Serial.println("[ProfileMgr] Failed to send continuation frame");
-        return false;
-    }
-    
-    return true;
 }
 
-bool ChargingProfileManager::sendOperationTrigger(bool start) {
-    uint8_t frame[8];
+void ChargingProfileManager::updateStateMachine() {
+    unsigned long now = millis();
+    unsigned long elapsed = now - updateStateStartTime;
     
-    if (start) {
-        buildOperationStart(frame);
-        Serial.println("[ProfileMgr] Sending operation START");
+    switch (updateState) {
+        case ProfileUpdateState::IDLE:
+            // Nothing to do
+            break;
+            
+        case ProfileUpdateState::READING_PROFILE:
+            // Check if profile became valid (received from CAN)
+            if (profiles[pendingProfileIndex].valid) {
+                Serial.printf("[ProfileMgr] Profile %d received after %lums\r\n", 
+                             pendingProfileIndex, elapsed);
+                setUpdateState(ProfileUpdateState::UPDATING_PROFILE);
+            }
+            // Check for timeout
+            else if (elapsed > PROFILE_READ_TIMEOUT) {
+                Serial.printf("[ProfileMgr] Profile %d read timeout\r\n", pendingProfileIndex);
+                setUpdateState(ProfileUpdateState::UPDATE_FAILED);
+            }
+            break;
+            
+        case ProfileUpdateState::UPDATING_PROFILE:
+            // Apply updates and send
+            applyPendingUpdates();
+            
+            if (sendProfileUpdateRequest(pendingProfileIndex)) {
+                Serial.printf("[ProfileMgr] Profile %d update sent\r\n", pendingProfileIndex);
+                setUpdateState(ProfileUpdateState::UPDATE_COMPLETE);
+            } else {
+                Serial.printf("[ProfileMgr] Profile %d update send failed\r\n", pendingProfileIndex);
+                setUpdateState(ProfileUpdateState::UPDATE_FAILED);
+            }
+            break;
+            
+        case ProfileUpdateState::UPDATE_COMPLETE:
+            // Call callback with success
+            completeUpdate(true);
+            
+            // Reset to IDLE on next loop
+            setUpdateState(ProfileUpdateState::IDLE);
+            break;
+            
+        case ProfileUpdateState::UPDATE_FAILED:
+            // Call callback with failure
+            completeUpdate(false);
+            
+            // Reset to IDLE on next loop
+            setUpdateState(ProfileUpdateState::IDLE);
+            break;
+    }
+}
+
+bool ChargingProfileManager::requestProfileUpdate(uint8_t profileIndex,
+                                                   const ProfileFieldUpdate& updates,
+                                                   std::function<void(bool)> callback) {
+    // Reject if already busy
+    if (updateState != ProfileUpdateState::IDLE) {
+        Serial.println("[ProfileMgr] Update rejected: already in progress");
+        return false;
+    }
+    
+    // Validate profile index
+    if (profileIndex >= PROFILE_COUNT) {
+        Serial.printf("[ProfileMgr] Update rejected: invalid profile %d\r\n", profileIndex);
+        return false;
+    }
+    
+    // Store request
+    pendingProfileIndex = profileIndex;
+    pendingUpdates = updates;
+    pendingCallback = callback;
+    
+    Serial.printf("[ProfileMgr] Profile %d update requested\r\n", profileIndex);
+    
+    // Check if we need to read profile first
+    if (!profiles[profileIndex].valid) {
+        Serial.printf("[ProfileMgr] Profile %d not valid, reading first\r\n", profileIndex);
+        
+        if (sendProfileReadRequest(profileIndex)) {
+            setUpdateState(ProfileUpdateState::READING_PROFILE);
+            return true;
+        } else {
+            Serial.printf("[ProfileMgr] Profile %d read request failed\r\n", profileIndex);
+            return false;
+        }
     } else {
-        buildOperationStop(frame);
-        Serial.println("[ProfileMgr] Sending operation STOP");
+        // Profile already valid, proceed to update
+        Serial.printf("[ProfileMgr] Profile %d already valid, proceeding to update\r\n", profileIndex);
+        setUpdateState(ProfileUpdateState::UPDATING_PROFILE);
+        return true;
+    }
+}
+
+void ChargingProfileManager::cancelProfileUpdate() {
+    if (updateState != ProfileUpdateState::IDLE) {
+        Serial.println("[ProfileMgr] Update cancelled");
+        completeUpdate(false);
+        setUpdateState(ProfileUpdateState::IDLE);
+    }
+}
+
+void ChargingProfileManager::setUpdateState(ProfileUpdateState newState) {
+    if (updateState != newState) {
+        Serial.printf("[ProfileMgr] Update: %s -> %s\r\n",
+                     getUpdateStateName(),
+                     [this, newState]() {
+                         ProfileUpdateState temp = updateState;
+                         updateState = newState;
+                         const char* name = getUpdateStateName();
+                         updateState = temp;
+                         return name;
+                     }());
+        updateState = newState;
+        updateStateStartTime = millis();
+    }
+}
+
+void ChargingProfileManager::applyPendingUpdates() {
+    Profile& p = profiles[pendingProfileIndex];
+    
+    if (pendingUpdates.updateOperation) {
+        Serial.printf("[ProfileMgr] Updating operation: 0x%02X -> 0x%02X\r\n",
+                     p.operation, pendingUpdates.operation);
+        p.operation = pendingUpdates.operation;
     }
     
-    Serial.printf("[ProfileMgr] Frame: %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
-                  frame[0], frame[1], frame[2], frame[3],
-                  frame[4], frame[5], frame[6], frame[7]);
+    if (pendingUpdates.updateMaxCurrent) {
+        Serial.printf("[ProfileMgr] Updating maxCurrent: %d -> %d\r\n",
+                     p.maxCurrent, pendingUpdates.maxCurrent);
+        p.maxCurrent = pendingUpdates.maxCurrent;
+    }
     
-    return sendFrame(frame, 8);
+    if (pendingUpdates.updateTargetSoc) {
+        Serial.printf("[ProfileMgr] Updating targetSoc: %d -> %d\r\n",
+                     p.targetChargeLevel, pendingUpdates.targetSoc);
+        p.targetChargeLevel = pendingUpdates.targetSoc;
+    }
+    
+    if (pendingUpdates.updateTemperature) {
+        float oldTemp = p.getTemperature();
+        p.setTemperature(pendingUpdates.temperature);
+        Serial.printf("[ProfileMgr] Updating temperature: %.1f -> %.1f\r\n",
+                     oldTemp, pendingUpdates.temperature);
+    }
+}
+
+void ChargingProfileManager::completeUpdate(bool success) {
+    if (pendingCallback) {
+        pendingCallback(success);
+        pendingCallback = nullptr;
+    }
+}
+
+bool ChargingProfileManager::sendProfileReadRequest(uint8_t profileIndex) {
+    // TODO: Implement GET request for profile array
+    // For now, just request all profiles
+    Serial.printf("[ProfileMgr] Sending GET request for profile %d\r\n", profileIndex);
+    return requestAllProfiles();
+}
+
+bool ChargingProfileManager::sendProfileUpdateRequest(uint8_t profileIndex) {
+    // Encode full profile (RecordAddr=0, 20+ bytes) and send via SET_GET
+    Profile& p = profiles[profileIndex];
+    
+    // Build array header (4 bytes for SET_GET)
+    // Byte 0: [ASG-ID:4][Transaction-ID:4] - using 0x00
+    // Byte 1: [LargeIdx:1][PosTransmit:1][Backward:1][Shift:1][RecordAddr:4]
+    // Byte 2: startIndex
+    // Byte 3: elementCount
+    
+    uint8_t arrayHeader[4] = {
+        0x00,                              // ASG-ID=0, Transaction=0
+        0x10,                              // LargeIdx=0, PosTransmit=1, Backward=0, Shift=0, RecordAddr=0 (full)
+        profileIndex,                      // Start at this profile index
+        0x01                               // Update 1 element
+    };
+    
+    // Build profile data (20 bytes minimum, excluding name)
+    uint8_t profileData[20];
+    profileData[0] = p.operation;
+    profileData[1] = p.operation2;
+    profileData[2] = p.maxCurrent;
+    profileData[3] = p.minChargeLevel;
+    profileData[4] = p.minRange & 0xFF;            // LE low byte
+    profileData[5] = (p.minRange >> 8) & 0xFF;     // LE high byte
+    profileData[6] = p.targetChargeLevel;
+    profileData[7] = p.targetChargeDuration;
+    profileData[8] = p.targetChargeRange & 0xFF;   // LE low byte
+    profileData[9] = (p.targetChargeRange >> 8) & 0xFF;  // LE high byte
+    profileData[10] = p.unitRange;
+    profileData[11] = p.rangeCalculationSetup;
+    profileData[12] = p.temperatureRaw;
+    profileData[13] = p.temperatureUnit;
+    profileData[14] = p.leadTime;
+    profileData[15] = p.holdingTimePlug;
+    profileData[16] = p.holdingTimeBattery;
+    profileData[17] = p.providerDataId & 0xFF;     // LE low byte
+    profileData[18] = (p.providerDataId >> 8) & 0xFF;  // LE high byte
+    profileData[19] = p.nameLength;
+    
+    // Total payload: array header (4) + position byte (1) + profile data (20+)
+    // If PosTransmit=1, each element has [pos][data]
+    uint8_t totalPayloadLen = 4 + 1 + 20 + p.nameLength;
+    
+    // Build complete payload
+    uint8_t payload[64];  // Max BAP payload
+    if (totalPayloadLen > sizeof(payload)) {
+        Serial.printf("[ProfileMgr] ERROR: Profile %d payload too large: %d bytes\r\n", 
+                     profileIndex, totalPayloadLen);
+        return false;
+    }
+    
+    // Copy array header
+    memcpy(payload, arrayHeader, 4);
+    
+    // Add position byte (since PosTransmit=1)
+    payload[4] = profileIndex;
+    
+    // Copy profile data
+    memcpy(payload + 5, profileData, 20);
+    
+    // Copy name if present
+    if (p.nameLength > 0) {
+        memcpy(payload + 25, p.name, p.nameLength);
+    }
+    
+    Serial.printf("[ProfileMgr] Sending profile %d update: %d bytes, temp=%.1fC\r\n",
+                 profileIndex, totalPayloadLen, p.getTemperature());
+    
+    // Use high-level sendBapMessage helper - it handles framing automatically
+    auto sendFrame = [this](const uint8_t* data, uint8_t len) {
+        return manager->sendCanFrame(CAN_ID_BATTERY_TX, data, len, true);
+    };
+    
+    uint8_t frameCount = BapProtocol::sendBapMessage(
+        sendFrame,
+        OpCode::SET_GET,
+        DEVICE_BATTERY_CONTROL,
+        Function::PROFILES_ARRAY,
+        payload,
+        totalPayloadLen,
+        0  // group
+    );
+    
+    if (frameCount == 0) {
+        Serial.printf("[ProfileMgr] ERROR: Failed to send profile %d update\r\n", profileIndex);
+        return false;
+    }
+    
+    Serial.printf("[ProfileMgr] Sent %d frames for profile %d update\r\n", frameCount, profileIndex);
+    return true;
 }

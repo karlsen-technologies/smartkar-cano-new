@@ -7,17 +7,19 @@ VehicleManager::VehicleManager(CanManager *canMgr)
 {
     // Create mutex for thread-safe state access (Core 0 CAN task + Core 1 main loop)
     stateMutex = xSemaphoreCreateMutex();
-    if (stateMutex == nullptr) {
+    if (stateMutex == nullptr)
+    {
         Serial.println("[VehicleManager] CRITICAL: Failed to create state mutex!");
     }
-    
+
     // Register BAP channels with router
     bapRouter.registerChannel(&batteryControlChannel);
 }
 
 VehicleManager::~VehicleManager()
 {
-    if (stateMutex != nullptr) {
+    if (stateMutex != nullptr)
+    {
         vSemaphoreDelete(stateMutex);
         stateMutex = nullptr;
     }
@@ -50,10 +52,13 @@ void VehicleManager::loop()
 {
     // Update wake state machine (from main loop on Core 1)
     updateWakeStateMachine();
-    
+
     // Update channel command state machines
     batteryControlChannel.loop();
     
+    // Update profile manager state machine
+    profileManager.loop();
+
     // Periodic statistics logging (from main loop on Core 1)
     // DISABLED - reduces serial output noise
     // if (millis() - lastLogTime > LOG_INTERVAL)
@@ -70,12 +75,13 @@ void VehicleManager::loop()
 VehicleState VehicleManager::getStateCopy()
 {
     // Acquire mutex with 100ms timeout
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
         VehicleState copy = state;
         xSemaphoreGive(stateMutex);
         return copy;
     }
-    
+
     // Timeout - return potentially stale data
     Serial.println("[VehicleManager] WARNING: getStateCopy() mutex timeout, returning stale data");
     return state;
@@ -83,24 +89,26 @@ VehicleState VehicleManager::getStateCopy()
 
 bool VehicleManager::isVehicleAwake()
 {
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
         bool awake = state.isAwake();
         xSemaphoreGive(stateMutex);
         return awake;
     }
-    
+
     // Timeout - return potentially stale data
     return state.isAwake();
 }
 
 uint32_t VehicleManager::getFrameCount()
 {
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
         uint32_t count = state.canFrameCount;
         xSemaphoreGive(stateMutex);
         return count;
     }
-    
+
     // Timeout - return potentially stale data
     return state.canFrameCount;
 }
@@ -112,13 +120,14 @@ uint32_t VehicleManager::getFrameCount()
 void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc, bool extended)
 {
     // Acquire mutex with 10ms timeout (CAN task runs at high priority)
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) != pdTRUE)
+    {
         // Mutex timeout - skip this frame to avoid blocking CAN task
         // This should be rare; indicates main loop is holding mutex too long
         unhandledFrames++;
         return;
     }
-    
+
     // Count every frame
     state.markCanActivity();
 
@@ -148,35 +157,57 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc
     // Standard frames: O(1) switch routing
     switch (canId)
     {
-    case 0x0FD: case 0x3C0: case 0x6B2:
-        if (driveDomain.processFrame(canId, data, dlc)) driveFrames++;
-        else unhandledFrames++;
+    case 0x0FD:
+    case 0x3C0:
+    case 0x6B2:
+        if (driveDomain.processFrame(canId, data, dlc))
+            driveFrames++;
+        else
+            unhandledFrames++;
         break;
-    case 0x3D0: case 0x3D1: case 0x583:
-        if (bodyDomain.processFrame(canId, data, dlc)) bodyFrames++;
-        else unhandledFrames++;
+    case 0x3D0:
+    case 0x3D1:
+    case 0x583:
+        if (bodyDomain.processFrame(canId, data, dlc))
+            bodyFrames++;
+        else
+            unhandledFrames++;
         break;
-    case 0x484: case 0x485: case 0x486:
-        if (gpsDomain.processFrame(canId, data, dlc)) gpsFrames++;
-        else unhandledFrames++;
+    case 0x484:
+    case 0x485:
+    case 0x486:
+        if (gpsDomain.processFrame(canId, data, dlc))
+            gpsFrames++;
+        else
+            unhandledFrames++;
         break;
-    case 0x483: case 0x59E: case 0x5CA:
-        if (batteryDomain.processFrame(canId, data, dlc)) batteryFrames++;
-        else unhandledFrames++;
+    case 0x483:
+    case 0x59E:
+    case 0x5CA:
+        if (batteryDomain.processFrame(canId, data, dlc))
+            batteryFrames++;
+        else
+            unhandledFrames++;
         break;
-    case 0x5E1: case 0x66E:
-        if (climateDomain.processFrame(canId, data, dlc)) climateFrames++;
-        else unhandledFrames++;
+    case 0x5E1:
+    case 0x66E:
+        if (climateDomain.processFrame(canId, data, dlc))
+            climateFrames++;
+        else
+            unhandledFrames++;
         break;
-    case 0x5F5: case 0x5F7:
-        if (rangeDomain.processFrame(canId, data, dlc)) rangeFrames++;
-        else unhandledFrames++;
+    case 0x5F5:
+    case 0x5F7:
+        if (rangeDomain.processFrame(canId, data, dlc))
+            rangeFrames++;
+        else
+            unhandledFrames++;
         break;
     default:
         unhandledFrames++;
         break;
     }
-    
+
     xSemaphoreGive(stateMutex);
 }
 
@@ -207,12 +238,13 @@ bool VehicleManager::sendCanFrame(uint32_t canId, const uint8_t *data, uint8_t d
 
     if (result == ESP_OK)
     {
-        Serial.printf("[VehicleManager] TX: ID:0x%03lX [%d]", canId, dlc);
-        for (int i = 0; i < dlc; i++)
-        {
-            Serial.printf(" %02X", data[i]);
-        }
-        Serial.println();
+        // Debug logging (disabled - uncomment for CAN frame debugging)
+        // Serial.printf("[VehicleManager] TX: ID:0x%03lX [%d]", canId, dlc);
+        // for (int i = 0; i < dlc; i++)
+        // {
+        //     Serial.printf(" %02X", data[i]);
+        // }
+        // Serial.println();
         return true;
     }
     else if (result == ESP_ERR_TIMEOUT)
@@ -283,8 +315,8 @@ void VehicleManager::logStatistics()
                   batt.temperature, batt.powerKw);
     Serial.printf("[VehicleManager] Charging: %s (source:%s), Balancing: %s\r\n",
                   batt.charging ? "YES" : "no",
-                  batt.chargingSource == DataSource::BAP ? "BAP" :
-                  batt.chargingSource == DataSource::CAN_STD ? "CAN" : "none",
+                  batt.chargingSource == DataSource::BAP ? "BAP" : batt.chargingSource == DataSource::CAN_STD ? "CAN"
+                                                                                                              : "none",
                   batt.balancingActive ? "YES" : "no");
 
     // Drive status
@@ -352,20 +384,20 @@ void VehicleManager::logStatistics()
     uint8_t pendingCount, maxPendingCount;
     bapRouter.getAssemblerStats(shortMsgs, longMsgs, longStarts, longConts, contErrors, pendingOverflows, staleReplacements, pendingCount, maxPendingCount);
     Serial.printf("[VehicleManager] BAP Assembler: short=%lu long=%lu (starts=%lu conts=%lu) errors: cont=%lu overflow=%lu stale=%lu pending=%u max=%u\r\n",
-        shortMsgs, longMsgs, longStarts, longConts, contErrors, pendingOverflows, staleReplacements, pendingCount, maxPendingCount);
+                  shortMsgs, longMsgs, longStarts, longConts, contErrors, pendingOverflows, staleReplacements, pendingCount, maxPendingCount);
 
     // BAP command statistics
     uint32_t cmdQueued, cmdCompleted, cmdFailed;
     batteryControlChannel.getCommandStats(cmdQueued, cmdCompleted, cmdFailed);
     Serial.printf("[VehicleManager] BAP Commands: queued=%lu completed=%lu failed=%lu (success rate: %.1f%%)\r\n",
-        cmdQueued, cmdCompleted, cmdFailed,
-        cmdQueued > 0 ? (cmdCompleted * 100.0f / cmdQueued) : 100.0f);
+                  cmdQueued, cmdCompleted, cmdFailed,
+                  cmdQueued > 0 ? (cmdCompleted * 100.0f / cmdQueued) : 100.0f);
 
     // BAP status (consolidated into main state)
     const PlugState &plug = snapshot.plug;
     const BatteryState &batt2 = snapshot.battery;
     const ClimateState &clim2 = snapshot.climate;
-    
+
     if (plug.isValid())
     {
         Serial.printf("[VehicleManager] BAP Plug: %s (supply:%s lock:%d)\r\n",
@@ -373,7 +405,7 @@ void VehicleManager::logStatistics()
                       plug.hasSupply() ? "yes" : "no",
                       plug.lockState);
     }
-    
+
     if (batt2.socSource == DataSource::BAP || batt2.chargingDetailsUpdate > 0)
     {
         Serial.printf("[VehicleManager] BAP Charge: SOC=%.0f%% mode=%d status=%d amps=%d target=%d%% time=%dmin\r\n",
@@ -384,7 +416,7 @@ void VehicleManager::logStatistics()
                       batt2.targetSoc,
                       batt2.remainingTimeMin);
     }
-    
+
     // BAP Climate detail (only show when BAP is source)
     if (clim2.climateActiveSource == DataSource::BAP && clim2.climateActive)
     {
@@ -400,203 +432,239 @@ void VehicleManager::logStatistics()
 // Wake State Machine
 // =============================================================================
 
-bool VehicleManager::requestWake() {
+bool VehicleManager::requestWake()
+{
     // If already waking or awake, don't restart
-    if (wakeState == WakeState::WAKING || wakeState == WakeState::AWAKE) {
-        Serial.printf("[VehicleManager] Wake already in progress/complete (state=%s)\r\n", 
-                     getWakeStateName());
+    if (wakeState == WakeState::WAKING || wakeState == WakeState::AWAKE)
+    {
+        Serial.printf("[VehicleManager] Wake already in progress/complete (state=%s)\r\n",
+                      getWakeStateName());
         return true;
     }
-    
+
     // If vehicle already awake (via CAN activity), skip wake sequence
     // Thread-safe check with mutex
     bool vehicleAwake = false;
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
         vehicleAwake = state.isAwake();
         xSemaphoreGive(stateMutex);
     }
-    
-    if (vehicleAwake) {
+
+    if (vehicleAwake)
+    {
         Serial.println("[VehicleManager] Vehicle already awake (CAN active)");
         setWakeState(WakeState::AWAKE);
         startKeepAlive();
         return true;
     }
-    
+
     // Request wake
     Serial.println("[VehicleManager] Wake requested");
     setWakeState(WakeState::WAKE_REQUESTED);
     lastWakeActivity = millis();
     wakeAttempts++;
-    
+
     return true;
 }
 
-bool VehicleManager::isAwake() const {
+bool VehicleManager::isAwake() const
+{
     return wakeState == WakeState::AWAKE;
 }
 
-const char* VehicleManager::getWakeStateName() const {
-    switch (wakeState) {
-        case WakeState::ASLEEP: return "ASLEEP";
-        case WakeState::WAKE_REQUESTED: return "WAKE_REQUESTED";
-        case WakeState::WAKING: return "WAKING";
-        case WakeState::AWAKE: return "AWAKE";
-        default: return "UNKNOWN";
+const char *VehicleManager::getWakeStateName() const
+{
+    switch (wakeState)
+    {
+    case WakeState::ASLEEP:
+        return "ASLEEP";
+    case WakeState::WAKE_REQUESTED:
+        return "WAKE_REQUESTED";
+    case WakeState::WAKING:
+        return "WAKING";
+    case WakeState::AWAKE:
+        return "AWAKE";
+    default:
+        return "UNKNOWN";
     }
 }
 
-void VehicleManager::updateWakeStateMachine() {
+void VehicleManager::updateWakeStateMachine()
+{
     unsigned long now = millis();
     unsigned long elapsed = now - wakeStateStartTime;
-    
+
     // Always track vehicle state based on CAN activity (thread-safe read)
     bool vehicleHasCanActivity = false;
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
         vehicleHasCanActivity = state.isAwake();
         xSemaphoreGive(stateMutex);
     }
-    
+
     // Update keep-alive management
-    if (keepAliveActive) {
+    if (keepAliveActive)
+    {
         // Stop keep-alive after timeout (no commands for 5 minutes)
-        if (now - lastWakeActivity > KEEPALIVE_TIMEOUT) {
+        if (now - lastWakeActivity > KEEPALIVE_TIMEOUT)
+        {
             Serial.println("[VehicleManager] Keep-alive timeout (5 min since last command)");
             stopKeepAlive();
             // Don't force ASLEEP - let vehicle naturally go to sleep
         }
-        
+
         // Send keep-alive frame every 500ms while active
-        if (now - lastKeepAlive >= KEEPALIVE_INTERVAL) {
+        if (now - lastKeepAlive >= KEEPALIVE_INTERVAL)
+        {
             sendKeepAliveFrame();
             lastKeepAlive = now;
         }
     }
-    
+
     // Process state transitions
-    switch (wakeState) {
-        case WakeState::ASLEEP:
-            // Check if vehicle woke up naturally (door open, key fob, etc.)
-            if (vehicleHasCanActivity) {
-                Serial.println("[VehicleManager] Vehicle woke up (CAN activity detected)");
+    switch (wakeState)
+    {
+    case WakeState::ASLEEP:
+        // Check if vehicle woke up naturally (door open, key fob, etc.)
+        if (vehicleHasCanActivity)
+        {
+            Serial.println("[VehicleManager] Vehicle woke up (CAN activity detected)");
+            setWakeState(WakeState::AWAKE);
+        }
+        break;
+
+    case WakeState::WAKE_REQUESTED:
+        // Send wake sequence
+        Serial.println("[VehicleManager] Initiating wake sequence...");
+
+        // Send wake frame
+        if (!sendWakeFrame())
+        {
+            Serial.println("[VehicleManager] Failed to send wake frame");
+            setWakeState(WakeState::ASLEEP);
+            wakeFailed++;
+            break;
+        }
+
+        // Start keep-alive immediately
+        startKeepAlive();
+
+        // Small delay before BAP init
+        delay(100);
+
+        // Send BAP init
+        if (!sendBapInitFrame())
+        {
+            Serial.println("[VehicleManager] Failed to send BAP init frame");
+            stopKeepAlive();
+            setWakeState(WakeState::ASLEEP);
+            wakeFailed++;
+            break;
+        }
+
+        // Transition to WAKING
+        setWakeState(WakeState::WAKING);
+        break;
+
+    case WakeState::WAKING:
+        // Check if vehicle has woken up (CAN activity)
+        if (vehicleHasCanActivity)
+        {
+            // Wait for BAP initialization
+            if (elapsed >= BAP_INIT_WAIT)
+            {
+                Serial.printf("[VehicleManager] Vehicle awake after %lums\r\n", elapsed);
                 setWakeState(WakeState::AWAKE);
             }
-            break;
-            
-        case WakeState::WAKE_REQUESTED:
-            // Send wake sequence
-            Serial.println("[VehicleManager] Initiating wake sequence...");
-            
-            // Send wake frame
-            if (!sendWakeFrame()) {
-                Serial.println("[VehicleManager] Failed to send wake frame");
-                setWakeState(WakeState::ASLEEP);
-                wakeFailed++;
-                break;
-            }
-            
-            // Start keep-alive immediately
-            startKeepAlive();
-            
-            // Small delay before BAP init
-            delay(100);
-            
-            // Send BAP init
-            if (!sendBapInitFrame()) {
-                Serial.println("[VehicleManager] Failed to send BAP init frame");
-                stopKeepAlive();
-                setWakeState(WakeState::ASLEEP);
-                wakeFailed++;
-                break;
-            }
-            
-            // Transition to WAKING
-            setWakeState(WakeState::WAKING);
-            break;
-            
-        case WakeState::WAKING:
-            // Check if vehicle has woken up (CAN activity)
-            if (vehicleHasCanActivity) {
-                // Wait for BAP initialization
-                if (elapsed >= BAP_INIT_WAIT) {
-                    Serial.printf("[VehicleManager] Vehicle awake after %lums\r\n", elapsed);
-                    setWakeState(WakeState::AWAKE);
-                }
-            }
-            // Check for wake timeout
-            else if (elapsed > WAKE_TIMEOUT) {
-                Serial.println("[VehicleManager] Wake timeout - no CAN activity");
-                stopKeepAlive();
-                setWakeState(WakeState::ASLEEP);
-                wakeFailed++;
-            }
-            break;
-            
-        case WakeState::AWAKE:
-            // Vehicle went to sleep naturally (no CAN activity)
-            if (!vehicleHasCanActivity) {
-                Serial.println("[VehicleManager] Vehicle went to sleep (no CAN activity)");
-                stopKeepAlive();
-                setWakeState(WakeState::ASLEEP);
-            }
-            break;
+        }
+        // Check for wake timeout
+        else if (elapsed > WAKE_TIMEOUT)
+        {
+            Serial.println("[VehicleManager] Wake timeout - no CAN activity");
+            stopKeepAlive();
+            setWakeState(WakeState::ASLEEP);
+            wakeFailed++;
+        }
+        break;
+
+    case WakeState::AWAKE:
+        // Vehicle went to sleep naturally (no CAN activity)
+        if (!vehicleHasCanActivity)
+        {
+            Serial.println("[VehicleManager] Vehicle went to sleep (no CAN activity)");
+            stopKeepAlive();
+            setWakeState(WakeState::ASLEEP);
+        }
+        break;
     }
 }
 
-bool VehicleManager::sendWakeFrame() {
+bool VehicleManager::sendWakeFrame()
+{
     uint8_t wakeData[4] = {0x40, 0x00, 0x01, 0x1F};
     Serial.println("[VehicleManager] Sending wake frame (0x17330301)");
     return sendCanFrame(CAN_ID_WAKE, wakeData, 4, true);
 }
 
-bool VehicleManager::sendBapInitFrame() {
+bool VehicleManager::sendBapInitFrame()
+{
     uint8_t bapInitData[8] = {0x67, 0x10, 0x41, 0x84, 0x14, 0x00, 0x00, 0x00};
     Serial.println("[VehicleManager] Sending BAP init frame (0x1B000067)");
     return sendCanFrame(CAN_ID_BAP_INIT, bapInitData, 8, true);
 }
 
-bool VehicleManager::sendKeepAliveFrame() {
+bool VehicleManager::sendKeepAliveFrame()
+{
     uint8_t keepAliveData[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-    
-    if (sendCanFrame(CAN_ID_KEEPALIVE, keepAliveData, 8, false)) {
+
+    if (sendCanFrame(CAN_ID_KEEPALIVE, keepAliveData, 8, false))
+    {
         keepAlivesSent++;
         return true;
     }
-    
+
     Serial.println("[VehicleManager] Failed to send keep-alive frame");
     return false;
 }
 
-void VehicleManager::startKeepAlive() {
-    if (!keepAliveActive) {
+void VehicleManager::startKeepAlive()
+{
+    if (!keepAliveActive)
+    {
         Serial.println("[VehicleManager] Starting keep-alive (500ms interval)");
         keepAliveActive = true;
         lastKeepAlive = millis();
         lastWakeActivity = millis();
-        
+
         // Send first keep-alive immediately
         sendKeepAliveFrame();
     }
 }
 
-void VehicleManager::stopKeepAlive() {
-    if (keepAliveActive) {
+void VehicleManager::stopKeepAlive()
+{
+    if (keepAliveActive)
+    {
         Serial.println("[VehicleManager] Stopping keep-alive");
         keepAliveActive = false;
     }
 }
 
-void VehicleManager::setWakeState(WakeState newState) {
-    if (wakeState != newState) {
-        Serial.printf("[VehicleManager] Wake: %s -> %s\r\n", 
-                     getWakeStateName(),
-                     [this, newState]() {
-                         WakeState temp = wakeState;
-                         wakeState = newState;
-                         const char* name = getWakeStateName();
-                         wakeState = temp;
-                         return name;
-                     }());
+void VehicleManager::setWakeState(WakeState newState)
+{
+    if (wakeState != newState)
+    {
+        Serial.printf("[VehicleManager] Wake: %s -> %s\r\n",
+                      getWakeStateName(),
+                      [this, newState]()
+                      {
+                          WakeState temp = wakeState;
+                          wakeState = newState;
+                          const char *name = getWakeStateName();
+                          wakeState = temp;
+                          return name;
+                      }());
         wakeState = newState;
         wakeStateStartTime = millis();
     }

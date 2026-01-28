@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <functional>
 #include "ChargingProfile.h"
 #include "protocols/BapProtocol.h"
 
@@ -8,23 +9,24 @@
 class VehicleManager;
 
 /**
- * ChargingProfileManager - Manages Battery Control Profiles
+ * ChargingProfileManager - Profile Data Manager
  * 
- * This class handles:
+ * This class is responsible for:
  * - Storing the current state of all 4 profiles (0-3)
- * - Parsing profile data received from the car via BAP
- * - Building BAP messages to configure profiles
- * - Providing a high-level API for climate/charging operations
+ * - Parsing profile data received from BAP messages
+ * - Providing read/write access to profile data
  * 
  * Profile 0 is special:
  * - Used for "immediate" operations (start climate/charging now)
  * - Not shown in the infotainment UI as a "Charge Location"
- * - Always modified before executing immediate start commands
  * 
  * Profiles 1-3 are user-configurable:
  * - Shown as "Timer 1", "Timer 2", "Timer 3" in infotainment
  * - Can be enabled/disabled independently
  * - Have associated schedules (departure times)
+ * 
+ * Note: This class does NOT send commands. Command sending is handled
+ * by BatteryControlChannel. This is purely a data storage and parser.
  */
 class ChargingProfileManager {
 public:
@@ -50,58 +52,42 @@ public:
     bool isProfileValid(uint8_t index) const;
     
     // =========================================================================
-    // High-Level Operations (uses Profile 0)
+    // Profile Data Management
     // =========================================================================
     
     /**
-     * Start climate control immediately
+     * Update a profile's data locally (does not send to vehicle)
+     * @param profileIndex Profile to update (0-3)
+     * @param profile New profile settings
+     */
+    void updateProfileLocal(uint8_t profileIndex, const ChargingProfile::Profile& profile);
+    
+    /**
+     * Clear all profiles (reset to invalid state)
+     */
+    void clearAllProfiles();
+    
+    // =========================================================================
+    // BAP Request Methods (TODO: Move to BatteryControlChannel)
+    // =========================================================================
+    
+    /**
+     * Request all profiles from the vehicle
+     * @return true if request sent successfully
      * 
-     * This configures Profile 0 for climate mode and triggers it.
-     * @param tempCelsius Target temperature (15.5 - 30.0)
-     * @param allowBattery Allow running on battery (no plug required)
-     * @return true if commands were queued successfully
+     * TODO: This should be moved to BatteryControlChannel as it involves
+     * sending BAP commands. Kept here temporarily for backwards compatibility.
      */
-    bool startClimateNow(float tempCelsius = 22.0f, bool allowBattery = true);
+    bool requestAllProfiles();
     
     /**
-     * Stop climate control
-     * @return true if command was queued successfully
-     */
-    bool stopClimateNow();
-    
-    /**
-     * Start charging immediately
-     * 
-     * This configures Profile 0 for charging mode and triggers it.
-     * @param targetSoc Target state of charge (0-100%)
-     * @param maxCurrent Maximum charging current (0-32A)
-     * @return true if commands were queued successfully
-     */
-    bool startChargingNow(uint8_t targetSoc = 80, uint8_t maxCurrent = 32);
-    
-    /**
-     * Stop charging
-     * @return true if command was queued successfully
-     */
-    bool stopChargingNow();
-    
-    /**
-     * Start both charging and climate
-     * @return true if commands were queued successfully
-     */
-    bool startChargingAndClimateNow(float tempCelsius = 22.0f, 
-                                     uint8_t targetSoc = 80,
-                                     bool allowClimateOnBattery = true);
-    
-    // =========================================================================
-    // Profile Management (for Profiles 1-3)
-    // =========================================================================
-    
-    /**
-     * Update a timer profile (1-3) with new settings
+     * Update a timer profile (1-3) configuration
      * @param profileIndex Profile to update (1-3)
      * @param profile New profile settings
-     * @return true if update command was sent
+     * @return true if update sent successfully
+     * 
+     * TODO: This should be moved to BatteryControlChannel. Currently this
+     * only updates locally and doesn't actually send to vehicle (incomplete).
      */
     bool updateTimerProfile(uint8_t profileIndex, const ChargingProfile::Profile& profile);
     
@@ -109,15 +95,12 @@ public:
      * Enable or disable a timer profile
      * @param profileIndex Profile to enable/disable (1-3)
      * @param enable true to enable, false to disable
-     * @return true if command was sent
+     * @return true if command sent successfully
+     * 
+     * TODO: This should be moved to BatteryControlChannel as it sends BAP commands.
+     * Kept here temporarily for backwards compatibility.
      */
     bool setTimerProfileEnabled(uint8_t profileIndex, bool enable);
-    
-    /**
-     * Request all profiles from the car
-     * @return true if request was sent
-     */
-    bool requestAllProfiles();
     
     // =========================================================================
     // BAP Message Processing
@@ -125,55 +108,12 @@ public:
     
     /**
      * Process a ProfilesArray BAP message (function 0x19)
-     * Called by BapDomain when it receives profile data.
+     * Called by BatteryControlChannel when it receives profile data.
      * 
      * @param payload BAP message payload (after function ID)
      * @param len Payload length
      */
     void processProfilesArray(const uint8_t* payload, uint8_t len);
-    
-    // =========================================================================
-    // Command Building (for sending via BapDomain)
-    // =========================================================================
-    
-    /**
-     * Build frames to configure Profile 0 for a specific operation mode
-     * 
-     * This creates the 2-frame sequence needed to update Profile 0:
-     * Frame 1: Long BAP start frame
-     * Frame 2: Long BAP continuation frame
-     * 
-     * @param startFrame Output buffer for start frame (8 bytes)
-     * @param contFrame Output buffer for continuation frame (8 bytes)
-     * @param mode Operation mode (see ChargingProfile::OperationMode)
-     * @param maxCurrent Max charging current
-     * @param targetSoc Target SOC
-     * @return Number of frames (always 2)
-     */
-    uint8_t buildProfile0Config(uint8_t* startFrame, uint8_t* contFrame,
-                                 uint8_t mode, uint8_t maxCurrent = 32, 
-                                 uint8_t targetSoc = 80);
-    
-    /**
-     * Build frame to trigger Profile 0 (start operations)
-     * @param frame Output buffer (8 bytes)
-     * @return Frame length
-     */
-    uint8_t buildOperationStart(uint8_t* frame);
-    
-    /**
-     * Build frame to stop all operations
-     * @param frame Output buffer (8 bytes)
-     * @return Frame length
-     */
-    uint8_t buildOperationStop(uint8_t* frame);
-    
-    /**
-     * Build frame to request all profiles
-     * @param frame Output buffer (8 bytes)
-     * @return Frame length
-     */
-    uint8_t buildProfilesRequest(uint8_t* frame);
     
     // =========================================================================
     // Statistics
@@ -189,6 +129,81 @@ public:
      */
     unsigned long getLastUpdateTime() const { return lastUpdateTime; }
     
+    // =========================================================================
+    // Profile Update State Machine (for read-modify-write workflow)
+    // =========================================================================
+    
+    enum class ProfileUpdateState {
+        IDLE,               // No update in progress
+        READING_PROFILE,    // Waiting for profile data from GET request
+        UPDATING_PROFILE,   // Waiting for update confirmation from SET_GET
+        UPDATE_COMPLETE,    // Update successful
+        UPDATE_FAILED       // Update failed (timeout or error)
+    };
+    
+    /**
+     * Structure to hold a profile field update
+     */
+    struct ProfileFieldUpdate {
+        bool updateOperation = false;
+        uint8_t operation = 0;
+        
+        bool updateMaxCurrent = false;
+        uint8_t maxCurrent = 0;
+        
+        bool updateTargetSoc = false;
+        uint8_t targetSoc = 0;
+        
+        bool updateTemperature = false;
+        float temperature = 0.0f;
+    };
+    
+    /**
+     * Request a profile update (async, uses state machine)
+     * 
+     * Workflow:
+     * 1. Check if profile data is valid
+     *    - If NO: Send GET request, wait for response, then proceed to step 2
+     *    - If YES: Skip to step 2
+     * 2. Apply updates to profile data
+     * 3. Send SET_GET with full profile data
+     * 4. Wait for STATUS confirmation
+     * 5. Call callback with result
+     * 
+     * @param profileIndex Profile to update (0-3)
+     * @param updates Fields to update
+     * @param callback Called when update completes (true=success, false=failure)
+     * @return true if request queued, false if already busy
+     */
+    bool requestProfileUpdate(uint8_t profileIndex, 
+                             const ProfileFieldUpdate& updates,
+                             std::function<void(bool)> callback = nullptr);
+    
+    /**
+     * Cancel any pending profile update
+     */
+    void cancelProfileUpdate();
+    
+    /**
+     * Check if profile update is in progress
+     */
+    bool isUpdateInProgress() const { return updateState != ProfileUpdateState::IDLE; }
+    
+    /**
+     * Get current update state
+     */
+    ProfileUpdateState getUpdateState() const { return updateState; }
+    
+    /**
+     * Get update state as string (for logging)
+     */
+    const char* getUpdateStateName() const;
+    
+    /**
+     * Process state machine (called from VehicleManager::loop())
+     */
+    void loop();
+    
 private:
     VehicleManager* manager;
     
@@ -200,31 +215,62 @@ private:
     volatile unsigned long lastUpdateTime = 0;
     
     // =========================================================================
+    // Profile Update State Machine
+    // =========================================================================
+    
+    ProfileUpdateState updateState = ProfileUpdateState::IDLE;
+    unsigned long updateStateStartTime = 0;
+    
+    // Pending update request data
+    uint8_t pendingProfileIndex = 0;
+    ProfileFieldUpdate pendingUpdates;
+    std::function<void(bool)> pendingCallback = nullptr;
+    
+    // Timeout for profile operations
+    static constexpr unsigned long PROFILE_READ_TIMEOUT = 5000;   // 5s
+    static constexpr unsigned long PROFILE_UPDATE_TIMEOUT = 5000; // 5s
+    
+    /**
+     * Update state machine tick (called from loop())
+     */
+    void updateStateMachine();
+    
+    /**
+     * Set update state with logging
+     */
+    void setUpdateState(ProfileUpdateState newState);
+    
+    /**
+     * Send GET request for profile data
+     */
+    bool sendProfileReadRequest(uint8_t profileIndex);
+    
+    /**
+     * Send SET_GET with full profile update
+     */
+    bool sendProfileUpdateRequest(uint8_t profileIndex);
+    
+    /**
+     * Apply pending updates to profile data
+     */
+    void applyPendingUpdates();
+    
+    /**
+     * Call callback and reset state to IDLE
+     */
+    void completeUpdate(bool success);
+    
+    // =========================================================================
     // Internal Methods
     // =========================================================================
     
     /**
-     * Parse a full profile from BAP payload
+     * Parse a full profile from BAP payload (RecordAddr=0)
      */
     bool parseFullProfile(uint8_t profileIndex, const uint8_t* data, uint8_t len);
     
     /**
-     * Parse a compact profile update from BAP payload
+     * Parse a compact profile update from BAP payload (RecordAddr=6)
      */
     bool parseCompactProfile(uint8_t profileIndex, const uint8_t* data, uint8_t len);
-    
-    /**
-     * Send a CAN frame via the vehicle manager
-     */
-    bool sendFrame(const uint8_t* data, uint8_t len);
-    
-    /**
-     * Send the 2-frame profile configuration sequence
-     */
-    bool sendProfileConfig(uint8_t mode, uint8_t maxCurrent, uint8_t targetSoc);
-    
-    /**
-     * Send the operation mode trigger
-     */
-    bool sendOperationTrigger(bool start);
 };

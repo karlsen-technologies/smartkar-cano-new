@@ -39,9 +39,9 @@ namespace OpCode {
     constexpr uint8_t SET_GET = 0x02;       // Set value and get result
     
     // Response opcodes (what we receive)
-    constexpr uint8_t HEARTBEAT = 0x03;     // Periodic status update
-    constexpr uint8_t PROCESSING = 0x04;    // Command acknowledged, working
-    constexpr uint8_t INDICATION = 0x05;    // Unsolicited state change
+    constexpr uint8_t HEARTBEAT = 0x03;     // Periodic status update (HeartbeatStatus)
+    constexpr uint8_t STATUS = 0x04;        // Status response to Get/SetGet
+    constexpr uint8_t STATUS_ACK = 0x05;    // Acknowledge status received (StatusAck)
     constexpr uint8_t ACK = 0x06;           // Simple acknowledgment
     constexpr uint8_t ERROR = 0x07;         // Command failed
 }
@@ -184,6 +184,75 @@ inline uint8_t buildGetRequest(uint8_t* dest, uint8_t deviceId, uint8_t function
 inline uint8_t buildSetGetRequest(uint8_t* dest, uint8_t deviceId, uint8_t functionId,
                                    const uint8_t* payload = nullptr, uint8_t payloadLen = 0) {
     return encodeShortMessage(dest, OpCode::SET_GET, deviceId, functionId, payload, payloadLen);
+}
+
+// =============================================================================
+// High-Level Message Sending (abstracts short/long framing)
+// =============================================================================
+
+/**
+ * Send a complete BAP message, automatically handling short vs long framing
+ * 
+ * @param sendFrame Function to send one CAN frame: bool sendFrame(const uint8_t* data, uint8_t len)
+ * @param opcode BAP opcode (GET, SET_GET, etc.)
+ * @param deviceId Target device ID
+ * @param functionId Target function ID
+ * @param payload Message payload (can be nullptr)
+ * @param payloadLen Payload length (0-127)
+ * @param group Message group for long messages (0-3)
+ * @return Number of frames sent, or 0 on error
+ * 
+ * This function automatically:
+ * - Uses short message format if payload ≤ 6 bytes
+ * - Uses long message format (start + continuations) if payload > 6 bytes
+ * - Handles frame splitting and continuation indexing
+ * 
+ * Example usage:
+ *   auto sender = [&](const uint8_t* data, uint8_t len) {
+ *       return manager->sendCanFrame(CAN_ID_TX, data, len, true);
+ *   };
+ *   uint8_t frames = BapProtocol::sendBapMessage(sender, OpCode::SET_GET, 0x25, 0x19, 
+ *                                                 payload, payloadLen);
+ */
+template<typename SendFunc>
+inline uint8_t sendBapMessage(SendFunc sendFrame, uint8_t opcode, uint8_t deviceId, uint8_t functionId,
+                              const uint8_t* payload, uint8_t payloadLen, uint8_t group = 0) {
+    // Short message: payload ≤ 6 bytes
+    if (payloadLen <= 6) {
+        uint8_t frame[8];
+        encodeShortMessage(frame, opcode, deviceId, functionId, payload, payloadLen);
+        return sendFrame(frame, 8) ? 1 : 0;
+    }
+    
+    // Long message: payload > 6 bytes
+    uint8_t frameCount = 0;
+    uint8_t frame[8];
+    
+    // Send start frame (contains first 4 bytes of payload)
+    encodeLongStart(frame, opcode, deviceId, functionId, payloadLen, payload, group);
+    if (!sendFrame(frame, 8)) {
+        return 0;
+    }
+    frameCount++;
+    
+    // Send continuation frames (7 bytes of payload each)
+    uint8_t payloadOffset = 4;  // First 4 bytes already in start frame
+    uint8_t contIndex = 0;
+    
+    while (payloadOffset < payloadLen) {
+        uint8_t chunkLen = (payloadLen - payloadOffset > 7) ? 7 : (payloadLen - payloadOffset);
+        encodeLongContinuation(frame, payload + payloadOffset, chunkLen, group, contIndex);
+        
+        if (!sendFrame(frame, 8)) {
+            return 0;  // Failed to send continuation
+        }
+        
+        frameCount++;
+        payloadOffset += chunkLen;
+        contIndex = (contIndex + 1) & 0x0F;  // Wrap at 16
+    }
+    
+    return frameCount;
 }
 
 // =============================================================================

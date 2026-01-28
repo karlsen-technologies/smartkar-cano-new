@@ -78,8 +78,8 @@ CommandResult VehicleHandler::handleStartClimate(CommandContext& ctx) {
     Serial.printf("[VEHICLE] Starting climate control at %.1f°C (battery=%s)\r\n", 
                   tempCelsius, allowBattery ? "yes" : "no");
     
-    // Use ChargingProfileManager for proper profile 0 configuration + trigger
-    bool queued = vehicleManager->profiles().startClimateNow(tempCelsius, allowBattery);
+    // Queue command via BatteryControlChannel (non-blocking)
+    bool queued = vehicleManager->batteryControl().startClimate(tempCelsius, allowBattery);
     
     if (queued) {
         CommandResult result = CommandResult::ok("Climate start command queued");
@@ -105,8 +105,8 @@ CommandResult VehicleHandler::handleStartClimate(CommandContext& ctx) {
 CommandResult VehicleHandler::handleStopClimate(CommandContext& ctx) {
     Serial.println("[VEHICLE] Stopping climate control");
     
-    // Use ChargingProfileManager for proper stop sequence
-    bool queued = vehicleManager->profiles().stopClimateNow();
+    // Queue stop command via BatteryControlChannel (non-blocking)
+    bool queued = vehicleManager->batteryControl().stopClimate();
     
     if (queued) {
         // Emit event for climate stop request
@@ -129,11 +129,10 @@ CommandResult VehicleHandler::handleStopClimate(CommandContext& ctx) {
 CommandResult VehicleHandler::handleStartCharging(CommandContext& ctx) {
     Serial.println("[VEHICLE] Starting charging");
     
-    // Check if vehicle is plugged in first
-    VehicleState state = vehicleManager->getStateCopy();
-    if (!state.plug.isPlugged()) {
-        return CommandResult::error("Vehicle is not plugged in");
-    }
+    // Note: We don't check plug state here because:
+    // 1. Our state may be stale if device was asleep
+    // 2. The vehicle will respond with an error if not plugged in
+    // 3. Server/app can prevent command based on last known state
     
     // Extract optional parameters
     uint8_t targetSoc = 80;  // Default to 80%
@@ -150,8 +149,8 @@ CommandResult VehicleHandler::handleStartCharging(CommandContext& ctx) {
     
     Serial.printf("[VEHICLE] Charging params: targetSoc=%d%%, maxCurrent=%dA\r\n", targetSoc, maxCurrent);
     
-    // Use ChargingProfileManager for proper profile 0 configuration + trigger
-    bool queued = vehicleManager->profiles().startChargingNow(targetSoc, maxCurrent);
+    // Queue command via BatteryControlChannel (non-blocking)
+    bool queued = vehicleManager->batteryControl().startCharging(targetSoc, maxCurrent);
     
     if (queued) {
         CommandResult result = CommandResult::ok("Charging start command queued");
@@ -177,8 +176,8 @@ CommandResult VehicleHandler::handleStartCharging(CommandContext& ctx) {
 CommandResult VehicleHandler::handleStopCharging(CommandContext& ctx) {
     Serial.println("[VEHICLE] Stopping charging");
     
-    // Use ChargingProfileManager for proper stop sequence
-    bool queued = vehicleManager->profiles().stopChargingNow();
+    // Queue stop command via BatteryControlChannel (non-blocking)
+    bool queued = vehicleManager->batteryControl().stopCharging();
     
     if (queued) {
         // Emit event for charging stop request

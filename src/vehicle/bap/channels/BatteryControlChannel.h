@@ -183,6 +183,7 @@ public:
     
     enum class CommandState {
         IDLE,              // No pending commands
+        UPDATING_PROFILE,  // Waiting for profile update to complete
         REQUESTING_WAKE,   // Requested vehicle wake
         WAITING_FOR_WAKE,  // Polling for vehicle awake
         SENDING_COMMAND,   // Sending BAP frames
@@ -261,10 +262,11 @@ public:
     // =========================================================================
     
     void getFrameCounts(uint32_t& plugCount, uint32_t& chargeCount, 
-                        uint32_t& climateCount) const {
+                        uint32_t& climateCount, uint32_t& profileCount) const {
         plugCount = plugFrames;
         chargeCount = chargeFrames;
         climateCount = climateFrames;
+        profileCount = profileFrames;
     }
     
     void getCommandStats(uint32_t& queued, uint32_t& completed, uint32_t& failed) const {
@@ -300,12 +302,14 @@ private:
     uint8_t pendingMaxCurrent = 32;
     
     // Command timing
+    static constexpr unsigned long COMMAND_PROFILE_UPDATE_TIMEOUT = 5000;  // 5s max for profile update
     static constexpr unsigned long COMMAND_WAKE_TIMEOUT = 15000;  // 15s max wait for wake
     
     // Statistics
     volatile uint32_t plugFrames = 0;
     volatile uint32_t chargeFrames = 0;
     volatile uint32_t climateFrames = 0;
+    volatile uint32_t profileFrames = 0;
     volatile uint32_t otherFrames = 0;
     volatile uint32_t ignoredRequests = 0;
     volatile uint32_t decodeErrors = 0;
@@ -327,6 +331,16 @@ private:
      * Execute the pending command (send BAP frames)
      */
     bool executePendingCommand();
+    
+    /**
+     * Check if pending command needs profile update
+     */
+    bool needsProfileUpdate() const;
+    
+    /**
+     * Request profile update for the pending command
+     */
+    bool requestProfileUpdateForPendingCommand();
     
     /**
      * Set command state with logging

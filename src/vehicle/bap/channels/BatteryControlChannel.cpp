@@ -46,6 +46,22 @@ bool BatteryControlChannel::processMessage(const BapProtocol::BapMessage& msg) {
             climateFrames++;
             return true;
             
+        case Function::PROFILES_ARRAY:
+            // Only process STATUS responses (OpCode 0x04)
+            // Profile arrays are sent as STATUS in response to GET requests
+            if (msg.opcode == OpCode::STATUS) {
+                // Forward to ChargingProfileManager for parsing
+                if (manager) {
+                    manager->profiles().processProfilesArray(msg.payload, msg.payloadLen);
+                }
+                profileFrames++;
+                return true;
+            } else {
+                // Ignore non-STATUS opcodes (HeartbeatStatus, Error, etc.)
+                otherFrames++;
+                return false;
+            }
+            
         default:
             // Silently count unhandled functions - no logging from CAN task
             otherFrames++;
@@ -387,13 +403,35 @@ bool BatteryControlChannel::startClimate(float tempCelsius, bool allowBattery) {
         return false;
     }
     
-    // Queue command
+    // Store command parameters
     pendingCommand = PendingCommand::START_CLIMATE;
     pendingTempCelsius = tempCelsius;
     pendingAllowBattery = allowBattery;
-    
-    setCommandState(CommandState::REQUESTING_WAKE);
     commandsQueued++;
+    
+    // Start by ensuring vehicle is awake (profile update happens in state machine)
+    if (!manager->isAwake()) {
+        setCommandState(CommandState::REQUESTING_WAKE);
+    } else {
+        // Vehicle already awake, check if profile needs update
+        if (needsProfileUpdate()) {
+            // Need to update Profile 0 first
+            Serial.println("[BatteryControl] Vehicle awake, checking profile update");
+            if (requestProfileUpdateForPendingCommand()) {
+                setCommandState(CommandState::UPDATING_PROFILE);
+            } else {
+                // Profile update system busy
+                Serial.println("[BatteryControl] Profile update system busy");
+                commandsQueued--;  // Undo queue increment
+                pendingCommand = PendingCommand::NONE;
+                return false;
+            }
+        } else {
+            // Profile already correct, proceed directly to command
+            Serial.printf("[BatteryControl] Profile 0 already correct, proceeding with command\r\n");
+            setCommandState(CommandState::SENDING_COMMAND);
+        }
+    }
     
     Serial.printf("[BatteryControl] Queued: Start climate %.1f°C (battery=%s)\r\n",
                  tempCelsius, allowBattery ? "yes" : "no");
@@ -424,13 +462,87 @@ bool BatteryControlChannel::startCharging(uint8_t targetSoc, uint8_t maxCurrent)
         return false;
     }
     
-    // Queue command
+    // Store command parameters
     pendingCommand = PendingCommand::START_CHARGING;
     pendingTargetSoc = targetSoc;
     pendingMaxCurrent = maxCurrent;
-    
-    setCommandState(CommandState::REQUESTING_WAKE);
     commandsQueued++;
+    
+    // Start by ensuring vehicle is awake (profile update happens in state machine)
+    if (!manager->isAwake()) {
+        setCommandState(CommandState::REQUESTING_WAKE);
+    } else {
+        // Vehicle already awake, check if profile needs update
+        const auto& profile0 = manager->profiles().getProfile(0);
+        uint8_t desiredOp = ProfileOperation::CHARGING;
+        bool needsUpdate = false;
+        
+        // If profile not valid yet, we MUST update (this will trigger a read first)
+        if (!profile0.valid) {
+            needsUpdate = true;
+        } else {
+            // Profile is valid, check if parameters differ
+            
+            // Check target SoC
+            if (profile0.targetChargeLevel != targetSoc) {
+                needsUpdate = true;
+            }
+            
+            // Check max current
+            if (profile0.maxCurrent != maxCurrent) {
+                needsUpdate = true;
+            }
+            
+            // Check operation mode
+            if (profile0.operation != desiredOp) {
+                needsUpdate = true;
+            }
+        }
+        
+        if (needsUpdate) {
+            // Need to update Profile 0 first
+            Serial.printf("[BatteryControl] Updating Profile 0: targetSoc=%d%%, maxCurrent=%dA, op=0x%02X\r\n",
+                         targetSoc, maxCurrent, desiredOp);
+            
+            ChargingProfileManager::ProfileFieldUpdate updates;
+            updates.updateTargetSoc = true;
+            updates.targetSoc = targetSoc;
+            updates.updateMaxCurrent = true;
+            updates.maxCurrent = maxCurrent;
+            updates.updateOperation = true;
+            updates.operation = desiredOp;
+            
+            // Request profile update with callback
+            auto callback = [this](bool success) {
+                if (success) {
+                    // Profile updated, proceed with command
+                    Serial.println("[BatteryControl] Profile 0 updated, proceeding with command");
+                    setCommandState(CommandState::SENDING_COMMAND);
+                } else {
+                    // Profile update failed
+                    Serial.println("[BatteryControl] Profile update failed");
+                    setCommandState(CommandState::FAILED);
+                    commandsFailed++;
+                    emitCommandEvent("commandFailed", "profile_update_failed");
+                    pendingCommand = PendingCommand::NONE;
+                }
+            };
+            
+            if (manager->profiles().requestProfileUpdate(0, updates, callback)) {
+                setCommandState(CommandState::UPDATING_PROFILE);
+            } else {
+                // Profile update system busy
+                Serial.println("[BatteryControl] Profile update system busy");
+                commandsQueued--;  // Undo queue increment
+                pendingCommand = PendingCommand::NONE;
+                return false;
+            }
+        } else {
+            // Profile already correct, proceed directly to command
+            Serial.printf("[BatteryControl] Profile 0 already correct, proceeding with command\r\n");
+            setCommandState(CommandState::SENDING_COMMAND);
+        }
+    }
     
     Serial.printf("[BatteryControl] Queued: Start charging (SOC=%d%%, current=%dA)\r\n",
                  targetSoc, maxCurrent);
@@ -462,15 +574,37 @@ bool BatteryControlChannel::startChargingAndClimate(float tempCelsius, uint8_t t
         return false;
     }
     
-    // Queue command
+    // Store command parameters
     pendingCommand = PendingCommand::START_CHARGING_AND_CLIMATE;
     pendingTempCelsius = tempCelsius;
     pendingTargetSoc = targetSoc;
     pendingMaxCurrent = maxCurrent;
     pendingAllowBattery = allowBattery;
-    
-    setCommandState(CommandState::REQUESTING_WAKE);
     commandsQueued++;
+    
+    // Start by ensuring vehicle is awake (profile update happens in state machine)
+    if (!manager->isAwake()) {
+        setCommandState(CommandState::REQUESTING_WAKE);
+    } else {
+        // Vehicle already awake, check if profile needs update
+        if (needsProfileUpdate()) {
+            // Need to update Profile 0 first
+            Serial.println("[BatteryControl] Vehicle awake, checking profile update");
+            if (requestProfileUpdateForPendingCommand()) {
+                setCommandState(CommandState::UPDATING_PROFILE);
+            } else {
+                // Profile update system busy
+                Serial.println("[BatteryControl] Profile update system busy");
+                commandsQueued--;  // Undo queue increment
+                pendingCommand = PendingCommand::NONE;
+                return false;
+            }
+        } else {
+            // Profile already correct, proceed directly to command
+            Serial.printf("[BatteryControl] Profile 0 already correct, proceeding with command\r\n");
+            setCommandState(CommandState::SENDING_COMMAND);
+        }
+    }
     
     Serial.printf("[BatteryControl] Queued: Start charging+climate %.1f°C, SOC=%d%%, current=%dA, battery=%s\r\n",
                  tempCelsius, targetSoc, maxCurrent, allowBattery ? "yes" : "no");
@@ -488,6 +622,7 @@ void BatteryControlChannel::loop() {
 const char* BatteryControlChannel::getCommandStateName() const {
     switch (commandState) {
         case CommandState::IDLE: return "IDLE";
+        case CommandState::UPDATING_PROFILE: return "UPDATING_PROFILE";
         case CommandState::REQUESTING_WAKE: return "REQUESTING_WAKE";
         case CommandState::WAITING_FOR_WAKE: return "WAITING_FOR_WAKE";
         case CommandState::SENDING_COMMAND: return "SENDING_COMMAND";
@@ -504,6 +639,18 @@ void BatteryControlChannel::updateCommandStateMachine() {
     switch (commandState) {
         case CommandState::IDLE:
             // Nothing to do
+            break;
+            
+        case CommandState::UPDATING_PROFILE:
+            // ChargingProfileManager will call our callback when done
+            // Check for timeout
+            if (elapsed > COMMAND_PROFILE_UPDATE_TIMEOUT) {
+                Serial.println("[BatteryControl] Profile update timeout");
+                setCommandState(CommandState::FAILED);
+                commandsFailed++;
+                emitCommandEvent("commandFailed", "profile_update_timeout");
+                pendingCommand = PendingCommand::NONE;
+            }
             break;
             
         case CommandState::REQUESTING_WAKE:
@@ -527,7 +674,24 @@ void BatteryControlChannel::updateCommandStateMachine() {
             // Check if vehicle awake
             if (manager->isAwake()) {
                 Serial.printf("[BatteryControl] Vehicle awake after %lums\r\n", elapsed);
-                setCommandState(CommandState::SENDING_COMMAND);
+                
+                // Now that vehicle is awake, check if profile needs update
+                if (needsProfileUpdate()) {
+                    Serial.println("[BatteryControl] Vehicle awake, updating profile");
+                    if (requestProfileUpdateForPendingCommand()) {
+                        setCommandState(CommandState::UPDATING_PROFILE);
+                    } else {
+                        // Profile update system busy
+                        Serial.println("[BatteryControl] Profile update system busy");
+                        setCommandState(CommandState::FAILED);
+                        commandsFailed++;
+                        emitCommandEvent("commandFailed", "profile_update_busy");
+                        pendingCommand = PendingCommand::NONE;
+                    }
+                } else {
+                    // Profile already correct or not needed
+                    setCommandState(CommandState::SENDING_COMMAND);
+                }
             }
             // Check for timeout
             else if (elapsed > COMMAND_WAKE_TIMEOUT) {
@@ -548,6 +712,10 @@ void BatteryControlChannel::updateCommandStateMachine() {
                 Serial.println("[BatteryControl] Command sent successfully");
                 setCommandState(CommandState::DONE);
                 commandsCompleted++;
+                
+                // Send success event BEFORE clearing pendingCommand
+                emitCommandEvent("commandCompleted", nullptr);
+                pendingCommand = PendingCommand::NONE;
             } else {
                 Serial.println("[BatteryControl] Command send failed");
                 setCommandState(CommandState::FAILED);
@@ -555,14 +723,11 @@ void BatteryControlChannel::updateCommandStateMachine() {
                 
                 // Send failure event via singleton
                 emitCommandEvent("commandFailed", "send_failed");
+                pendingCommand = PendingCommand::NONE;
             }
-            pendingCommand = PendingCommand::NONE;
             break;
             
         case CommandState::DONE:
-            // Send success event via singleton
-            emitCommandEvent("commandCompleted", nullptr);
-            
             // Reset to IDLE on next loop
             setCommandState(CommandState::IDLE);
             break;
@@ -611,6 +776,170 @@ bool BatteryControlChannel::executePendingCommand() {
     }
 }
 
+bool BatteryControlChannel::needsProfileUpdate() const {
+    const auto& profile0 = manager->profiles().getProfile(0);
+    
+    switch (pendingCommand) {
+        case PendingCommand::START_CLIMATE: {
+            uint8_t desiredOp = pendingAllowBattery ? ProfileOperation::CLIMATE_ALLOW_BATTERY 
+                                                    : ProfileOperation::CLIMATE;
+            
+            // If profile not valid yet, we MUST update (this will trigger a read first)
+            if (!profile0.valid) {
+                return true;
+            }
+            
+            // Check temperature difference (> 0.5°C tolerance)
+            if (abs(profile0.getTemperature() - pendingTempCelsius) > 0.5f) {
+                return true;
+            }
+            
+            // Check operation mode
+            if (profile0.operation != desiredOp) {
+                return true;
+            }
+            
+            return false;
+        }
+        
+        case PendingCommand::START_CHARGING: {
+            uint8_t desiredOp = ProfileOperation::CHARGING;
+            
+            // If profile not valid yet, we MUST update (this will trigger a read first)
+            if (!profile0.valid) {
+                return true;
+            }
+            
+            // Check target SoC
+            if (profile0.targetChargeLevel != pendingTargetSoc) {
+                return true;
+            }
+            
+            // Check max current
+            if (profile0.maxCurrent != pendingMaxCurrent) {
+                return true;
+            }
+            
+            // Check operation mode
+            if (profile0.operation != desiredOp) {
+                return true;
+            }
+            
+            return false;
+        }
+        
+        case PendingCommand::START_CHARGING_AND_CLIMATE: {
+            uint8_t desiredOp = pendingAllowBattery ? ProfileOperation::CHARGING_ALLOW_CLIMATE_BATTERY 
+                                                    : ProfileOperation::CHARGING_AND_CLIMATE;
+            
+            // If profile not valid yet, we MUST update (this will trigger a read first)
+            if (!profile0.valid) {
+                return true;
+            }
+            
+            // Check temperature (> 0.5°C tolerance)
+            if (abs(profile0.getTemperature() - pendingTempCelsius) > 0.5f) {
+                return true;
+            }
+            
+            // Check target SoC
+            if (profile0.targetChargeLevel != pendingTargetSoc) {
+                return true;
+            }
+            
+            // Check max current
+            if (profile0.maxCurrent != pendingMaxCurrent) {
+                return true;
+            }
+            
+            // Check operation mode
+            if (profile0.operation != desiredOp) {
+                return true;
+            }
+            
+            return false;
+        }
+        
+        case PendingCommand::STOP_CLIMATE:
+        case PendingCommand::STOP_CHARGING:
+        case PendingCommand::NONE:
+        default:
+            // Stop commands don't need profile updates
+            return false;
+    }
+}
+
+bool BatteryControlChannel::requestProfileUpdateForPendingCommand() {
+    ChargingProfileManager::ProfileFieldUpdate updates;
+    uint8_t desiredOp = 0;
+    
+    switch (pendingCommand) {
+        case PendingCommand::START_CLIMATE:
+            desiredOp = pendingAllowBattery ? ProfileOperation::CLIMATE_ALLOW_BATTERY 
+                                            : ProfileOperation::CLIMATE;
+            updates.updateTemperature = true;
+            updates.temperature = pendingTempCelsius;
+            updates.updateOperation = true;
+            updates.operation = desiredOp;
+            
+            Serial.printf("[BatteryControl] Updating Profile 0: temp=%.1f°C, op=0x%02X\r\n",
+                         pendingTempCelsius, desiredOp);
+            break;
+            
+        case PendingCommand::START_CHARGING:
+            desiredOp = ProfileOperation::CHARGING;
+            updates.updateTargetSoc = true;
+            updates.targetSoc = pendingTargetSoc;
+            updates.updateMaxCurrent = true;
+            updates.maxCurrent = pendingMaxCurrent;
+            updates.updateOperation = true;
+            updates.operation = desiredOp;
+            
+            Serial.printf("[BatteryControl] Updating Profile 0: targetSoc=%d%%, maxCurrent=%dA, op=0x%02X\r\n",
+                         pendingTargetSoc, pendingMaxCurrent, desiredOp);
+            break;
+            
+        case PendingCommand::START_CHARGING_AND_CLIMATE:
+            desiredOp = pendingAllowBattery ? ProfileOperation::CHARGING_ALLOW_CLIMATE_BATTERY 
+                                            : ProfileOperation::CHARGING_AND_CLIMATE;
+            updates.updateTemperature = true;
+            updates.temperature = pendingTempCelsius;
+            updates.updateTargetSoc = true;
+            updates.targetSoc = pendingTargetSoc;
+            updates.updateMaxCurrent = true;
+            updates.maxCurrent = pendingMaxCurrent;
+            updates.updateOperation = true;
+            updates.operation = desiredOp;
+            
+            Serial.printf("[BatteryControl] Updating Profile 0: temp=%.1f°C, targetSoc=%d%%, maxCurrent=%dA, op=0x%02X\r\n",
+                         pendingTempCelsius, pendingTargetSoc, pendingMaxCurrent, desiredOp);
+            break;
+            
+        default:
+            // No profile update needed for STOP commands
+            Serial.println("[BatteryControl] No profile update needed for this command");
+            return false;
+    }
+    
+    // Request profile update with callback
+    auto callback = [this](bool success) {
+        if (success) {
+            // Profile updated, proceed with command
+            Serial.println("[BatteryControl] Profile 0 updated, proceeding with command");
+            setCommandState(CommandState::SENDING_COMMAND);
+        } else {
+            // Profile update failed
+            Serial.println("[BatteryControl] Profile update failed");
+            setCommandState(CommandState::FAILED);
+            commandsFailed++;
+            emitCommandEvent("commandFailed", "profile_update_failed");
+            pendingCommand = PendingCommand::NONE;
+        }
+    };
+    
+    return manager->profiles().requestProfileUpdate(0, updates, callback);
+}
+
 void BatteryControlChannel::setCommandState(CommandState newState) {
     if (commandState != newState) {
         Serial.printf("[BatteryControl] Command: %s -> %s\r\n",
@@ -629,11 +958,11 @@ void BatteryControlChannel::setCommandState(CommandState newState) {
 
 const char* BatteryControlChannel::getPendingCommandName() const {
     switch (pendingCommand) {
-        case PendingCommand::START_CLIMATE: return "startClimate";
-        case PendingCommand::STOP_CLIMATE: return "stopClimate";
-        case PendingCommand::START_CHARGING: return "startCharging";
-        case PendingCommand::STOP_CHARGING: return "stopCharging";
-        case PendingCommand::START_CHARGING_AND_CLIMATE: return "startChargingAndClimate";
+        case PendingCommand::START_CLIMATE: return "vehicle.startClimate";
+        case PendingCommand::STOP_CLIMATE: return "vehicle.stopClimate";
+        case PendingCommand::START_CHARGING: return "vehicle.startCharging";
+        case PendingCommand::STOP_CHARGING: return "vehicle.stopCharging";
+        case PendingCommand::START_CHARGING_AND_CLIMATE: return "vehicle.startChargingAndClimate";
         case PendingCommand::NONE:
         default: return "none";
     }

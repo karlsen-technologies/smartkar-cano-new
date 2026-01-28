@@ -140,6 +140,9 @@ struct Profile {
     uint8_t nameLength = 0;
     
     // Metadata (not transmitted)
+    // IMPORTANT: 'valid' flag is ONLY set when a FULL profile (RecordAddr=0, 20+ bytes) 
+    // is received. Compact updates (RecordAddr=6, 4 bytes) do NOT set this flag.
+    // This ensures we have complete data before attempting read-modify-write operations.
     bool valid = false;
     unsigned long lastUpdate = 0;
     
