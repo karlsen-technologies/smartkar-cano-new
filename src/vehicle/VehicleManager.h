@@ -9,6 +9,7 @@
 #include "domains/GpsDomain.h"
 #include "domains/RangeDomain.h"
 #include "domains/BapDomain.h"
+#include "ChargingProfileManager.h"
 
 // Enable this to track unique CAN IDs seen (adds overhead to CAN task)
 // #define DEBUG_CAN_IDS  // DISABLED - no longer needed
@@ -109,6 +110,11 @@ public:
      */
     BapDomain& bap() { return bapDomain; }
     
+    /**
+     * Get the charging profile manager (high-level charging/climate API).
+     */
+    ChargingProfileManager& profiles() { return profileManager; }
+    
     // =========================================================================
     // Configuration
     // =========================================================================
@@ -133,6 +139,9 @@ private:
     GpsDomain gpsDomain;
     RangeDomain rangeDomain;
     BapDomain bapDomain;
+    
+    // Charging profile manager (high-level API for charging/climate)
+    ChargingProfileManager profileManager;
     
     // Configuration
     bool verbose = false;

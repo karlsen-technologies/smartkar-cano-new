@@ -9,7 +9,8 @@ BatteryDomain::BatteryDomain(VehicleState& state, VehicleManager* manager)
 
 bool BatteryDomain::handlesCanId(uint32_t canId) const {
     return canId == CAN_ID_BMS_07 ||
-           canId == CAN_ID_BMS_06;
+           canId == CAN_ID_BMS_06 ||
+           canId == CAN_ID_MOTOR_HYBRID_06;
 }
 
 bool BatteryDomain::processFrame(uint32_t canId, const uint8_t* data, uint8_t dlc) {
@@ -24,6 +25,10 @@ bool BatteryDomain::processFrame(uint32_t canId, const uint8_t* data, uint8_t dl
             
         case CAN_ID_BMS_06:
             processBMS06(data);
+            return true;
+            
+        case CAN_ID_MOTOR_HYBRID_06:
+            processMotorHybrid06(data);
             return true;
             
         default:
@@ -55,6 +60,18 @@ void BatteryDomain::processBMS06(const uint8_t* data) {
     BatteryState& battery = vehicleState.battery;
     battery.temperature = temp;
     battery.tempUpdate = millis();
+    
+    // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
+}
+
+void BatteryDomain::processMotorHybrid06(const uint8_t* data) {
+    motorHybrid06Count++;
+    // Motor_Hybrid_06 (0x483) - Power meter for charging/climate
+    BroadcastDecoder::MotorHybrid06Data decoded = BroadcastDecoder::decodeMotorHybrid06(data);
+    
+    BatteryState& battery = vehicleState.battery;
+    battery.powerKw = decoded.powerKw;
+    battery.powerUpdate = millis();
     
     // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }

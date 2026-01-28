@@ -12,7 +12,10 @@ class VehicleManager;
 class CommandRouter;
 class DeviceProvider;
 class NetworkProvider;
+class VehicleProvider;
 class SystemHandler;
+class VehicleHandler;
+class ChargingProfileHandler;
 
 /**
  * Device states for the main state machine
@@ -121,9 +124,12 @@ private:
     // Telemetry providers
     DeviceProvider* deviceProvider = nullptr;
     NetworkProvider* networkProvider = nullptr;
+    VehicleProvider* vehicleProvider = nullptr;
     
     // Command handlers
     SystemHandler* systemHandler = nullptr;
+    VehicleHandler* vehicleHandler = nullptr;
+    ChargingProfileHandler* chargingProfileHandler = nullptr;
     
     // Wake cause string (set once on boot)
     const char* wakeCauseString = "unknown";

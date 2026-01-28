@@ -149,6 +149,10 @@ struct BatteryState {
     float dcdcCurrent = 0.0f;       // 12V system current
     unsigned long dcdcUpdate = 0;
     
+    // From 0x483 (Motor_Hybrid_06) - Power meter for charging/climate
+    float powerKw = 0.0f;           // Charging/climate power in kW (~10W resolution)
+    unsigned long powerUpdate = 0;
+    
     bool isCharging() const {
         return chargingActive;
     }

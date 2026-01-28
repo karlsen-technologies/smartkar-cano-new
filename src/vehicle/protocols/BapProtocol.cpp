@@ -237,59 +237,139 @@ ClimateStateData decodeClimateState(const uint8_t* payload, uint8_t len) {
 // Command Builders
 // =============================================================================
 
-uint8_t buildClimateStart(uint8_t* dest, float tempCelsius) {
-    // Climate start uses profiles - need to configure profile first
-    // For immediate start, we use OperationMode function (0x18)
-    
-    // Temperature encoding: (temp_celsius - 10) * 10
-    // Valid range: 15.5 - 30.0°C
-    if (tempCelsius < 15.5f) tempCelsius = 15.5f;
-    if (tempCelsius > 30.0f) tempCelsius = 30.0f;
-    
-    // Build SetGet for OperationMode with "immediately" flag
-    // Payload: [flags, mode_byte]
-    // mode_byte bit 0 = immediately active
+/**
+ * Profile 0 Operation Modes (for PROFILES_ARRAY function 0x19)
+ * These define what Profile 0 should do when activated.
+ * 
+ * From reverse engineering (discord thread):
+ * - 0x01 = Charging only
+ * - 0x02 = Climate only
+ * - 0x03 = Charging and climate
+ * - 0x05 = Charging and allow climate on battery
+ * - 0x06 = Climate and allow on battery
+ */
+namespace ProfileOperation {
+    constexpr uint8_t CHARGING = 0x01;
+    constexpr uint8_t CLIMATE = 0x02;
+    constexpr uint8_t CHARGING_AND_CLIMATE = 0x03;
+    constexpr uint8_t CHARGING_ALLOW_CLIMATE_BATTERY = 0x05;
+    constexpr uint8_t CLIMATE_ALLOW_BATTERY = 0x06;
+}
+
+uint8_t buildOperationModeStart(uint8_t* dest) {
+    // Execute Profile 0 (the "immediately" profile)
+    // Short BAP message to OPERATION_MODE (0x18)
+    // Payload: [0x00, 0x01] = immediately active
+    // 
+    // From trace: 29,58,00,01
+    // Decoded: opcode=2 (SET_GET), device=0x25, function=0x18, payload=[0x00, 0x01]
     uint8_t payload[2] = {
         0x00,  // Flags
-        0x01   // Mode: immediately = true
+        0x01   // immediately = true
     };
     
     return encodeShortMessage(dest, OpCode::SET_GET, DEVICE_BATTERY_CONTROL, 
                               Function::OPERATION_MODE, payload, 2);
+}
+
+uint8_t buildOperationModeStop(uint8_t* dest) {
+    // Stop Profile 0 execution
+    // Short BAP message to OPERATION_MODE (0x18)
+    // Payload: [0x00, 0x00] = immediately off
+    //
+    // From trace: 29,58,00,00
+    uint8_t payload[2] = {
+        0x00,  // Flags
+        0x00   // immediately = false (stop)
+    };
+    
+    return encodeShortMessage(dest, OpCode::SET_GET, DEVICE_BATTERY_CONTROL, 
+                              Function::OPERATION_MODE, payload, 2);
+}
+
+uint8_t buildProfileConfig(uint8_t* startFrame, uint8_t* contFrame, uint8_t operationMode) {
+    // Configure Profile 0 with the desired operation mode
+    // This is a LONG BAP message to PROFILES_ARRAY (0x19) using mode 6 update
+    //
+    // From trace analysis:
+    // Start:  80,08,29,59,22,06,00,01
+    //   - 80 = Long message start, group 0
+    //   - 08 = Total payload length (6 bytes after BAP header)
+    //   - 29,59 = BAP header: opcode=2 (SET_GET), device=0x25, function=0x19
+    //   - 22,06,00,01 = First 4 bytes of payload
+    //
+    // Cont:   C0,06,00,20,00,00,00,00
+    //   - C0 = Long continuation, group 0, index 0
+    //   - 06,00,20,00,00,00,00 = Remaining payload bytes
+    //   - Byte at position 0 (0x06) is the operation mode!
+    //
+    // The payload structure (mode 6 partial update of profile array):
+    //   [0x22, profile_index, 0x00, 0x01, operation_mode, 0x00, 0x20, 0x00, ...]
+    //   - 0x22 = Update mode (mode 6 = partial property update)
+    //   - profile_index = 0x06 for profile 0 (encoded as 0x06)
+    //   - operation_mode = what the profile should do
+    
+    // Payload for profile 0 configuration (total 6 bytes)
+    uint8_t payload[6] = {
+        0x22,           // Update mode marker
+        0x06,           // Profile index (0 = immediately profile, encoded)
+        0x00,           // Padding
+        0x01,           // Unknown (always 0x01 in traces)
+        operationMode,  // The operation mode (climate, charging, etc.)
+        0x00            // Padding
+    };
+    
+    // Encode long message start frame
+    // Note: totalPayloadLen = 6 (just the payload, not including BAP header)
+    encodeLongStart(startFrame, OpCode::SET_GET, DEVICE_BATTERY_CONTROL,
+                    Function::PROFILES_ARRAY, 6, payload, 0);
+    
+    // Encode continuation frame with remaining payload bytes
+    // After start frame takes first 4 bytes of payload, we have 2 more + padding
+    uint8_t contPayload[7] = {
+        operationMode,  // This is where the operation mode actually appears
+        0x00,           // Padding
+        0x20,           // Unknown flag (from traces)
+        0x00, 0x00, 0x00, 0x00  // Padding
+    };
+    encodeLongContinuation(contFrame, contPayload, 7, 0, 0);
+    
+    return 8;  // Each frame is 8 bytes
+}
+
+uint8_t buildClimateStart(uint8_t* dest, float tempCelsius) {
+    // For climate start, we just need to trigger the operation mode
+    // The profile should already be configured, or we configure it for climate
+    // 
+    // NOTE: For full implementation, you would:
+    // 1. Send buildProfileConfig() with CLIMATE_ALLOW_BATTERY mode
+    // 2. Wait for ACK
+    // 3. Send buildOperationModeStart()
+    //
+    // For now, we just send the operation mode start command.
+    // The VW OCU typically pre-configures profile 0 before triggering.
+    //
+    // Temperature is stored in the profile configuration, not in the start command.
+    // To set temperature, you need to update the profile's temperature field.
+    (void)tempCelsius;  // Temperature requires separate profile temperature update
+    
+    return buildOperationModeStart(dest);
 }
 
 uint8_t buildClimateStop(uint8_t* dest) {
-    // Stop climate by clearing the "immediately" flag
-    uint8_t payload[2] = {
-        0x00,  // Flags
-        0x00   // Mode: all timers off
-    };
-    
-    return encodeShortMessage(dest, OpCode::SET_GET, DEVICE_BATTERY_CONTROL, 
-                              Function::OPERATION_MODE, payload, 2);
+    // Stop by sending operation mode stop
+    return buildOperationModeStop(dest);
 }
 
 uint8_t buildChargeStart(uint8_t* dest) {
-    // Charging is typically controlled via profiles
-    // For immediate start, configure profile with CHARGE flag
-    uint8_t payload[2] = {
-        0x00,  // Flags
-        0x01   // Mode: immediately = true (charging enabled in profile)
-    };
-    
-    return encodeShortMessage(dest, OpCode::SET_GET, DEVICE_BATTERY_CONTROL, 
-                              Function::OPERATION_MODE, payload, 2);
+    // Same as climate - trigger operation mode
+    // Profile should be configured for charging mode
+    return buildOperationModeStart(dest);
 }
 
 uint8_t buildChargeStop(uint8_t* dest) {
-    // Stop charging by clearing operation mode
-    uint8_t payload[2] = {
-        0x00,  // Flags  
-        0x00   // Mode: all off
-    };
-    
-    return encodeShortMessage(dest, OpCode::SET_GET, DEVICE_BATTERY_CONTROL, 
-                              Function::OPERATION_MODE, payload, 2);
+    // Stop by sending operation mode stop
+    return buildOperationModeStop(dest);
 }
 
 // =============================================================================

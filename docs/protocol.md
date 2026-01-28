@@ -312,6 +312,210 @@ Multiple domains are included in a single state message.
 | `linkConnected` | boolean | Whether TCP link is connected |
 | `linkState` | string | `disconnected`, `connecting`, `authenticating`, `connected` |
 
+### Vehicle Domain
+
+Full vehicle telemetry from CAN bus and BAP protocol.
+
+```json
+{
+  "type":"state",
+  "data":{
+    "vehicle":{
+      "battery":{
+        "soc":65.5,
+        "socHiRes":65.48,
+        "voltage":355.2,
+        "current":-12.5,
+        "powerKw":7.4,
+        "energyWh":22400,
+        "maxEnergyWh":35800,
+        "temperature":25.5,
+        "charging":true,
+        "balancing":false,
+        "dcdc12v":14.2,
+        "dcdcCurrent":5.3
+      },
+      "drive":{
+        "ignition":2,
+        "keyInserted":true,
+        "ignitionOn":true,
+        "speedKmh":0.0,
+        "odometerKm":45230
+      },
+      "body":{
+        "locked":true,
+        "centralLock":1,
+        "trunkOpen":false,
+        "anyDoorOpen":false,
+        "doors":{
+          "driverOpen":false,
+          "passengerOpen":false,
+          "rearLeftOpen":false,
+          "rearRightOpen":false
+        }
+      },
+      "range":{
+        "totalKm":185,
+        "electricKm":185,
+        "displayKm":185,
+        "consumption":15.2,
+        "tendency":"stable",
+        "reserveWarning":false
+      },
+      "canGps":{
+        "lat":52.520008,
+        "lng":13.404954,
+        "alt":34.5,
+        "heading":245.3,
+        "satellites":8,
+        "fixType":"3D",
+        "hdop":1.2
+      },
+      "climate":{
+        "insideTemp":21.5,
+        "outsideTemp":15.0,
+        "standbyHeating":false,
+        "standbyVent":false
+      },
+      "plug":{
+        "plugged":true,
+        "hasSupply":true,
+        "state":"plugged"
+      },
+      "bapCharge":{
+        "mode":"AC",
+        "status":"running",
+        "soc":65,
+        "remainingMin":45,
+        "targetSoc":80,
+        "amps":32
+      },
+      "bapClimate":{
+        "active":false,
+        "heating":false,
+        "cooling":false,
+        "ventilation":false,
+        "autoDefrost":false,
+        "currentTemp":21.5,
+        "remainingMin":0
+      },
+      "vehicleAwake":true,
+      "canFrameCount":125340
+    }
+  }
+}
+```
+
+#### Battery Subobject
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `soc` | float | Usable/display state of charge (%) |
+| `socHiRes` | float | High-resolution SOC from BMS (%) |
+| `voltage` | float | HV battery voltage (V) |
+| `current` | float | Battery current (A, negative = discharge) |
+| `powerKw` | float | Charging/climate power (kW, from 0x483) |
+| `energyWh` | float | Current energy content (Wh) |
+| `maxEnergyWh` | float | Maximum energy capacity (Wh) |
+| `temperature` | float | Battery temperature (°C) |
+| `charging` | boolean | Whether charging session is active |
+| `balancing` | boolean | Whether cell balancing is active |
+| `dcdc12v` | float | 12V system voltage from DC-DC converter |
+| `dcdcCurrent` | float | 12V system current (A) |
+
+#### Drive Subobject
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ignition` | integer | Ignition state: 0=off, 1=accessory, 2=on, 3=start |
+| `keyInserted` | boolean | Key is inserted (Kl. S) |
+| `ignitionOn` | boolean | Ignition is on (Kl. 15) |
+| `speedKmh` | float | Current speed (km/h) |
+| `odometerKm` | integer | Total odometer (km) |
+
+#### Body Subobject
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `locked` | boolean | Vehicle is locked |
+| `centralLock` | integer | Lock state: 0=unknown, 1=locked, 2=unlocked |
+| `trunkOpen` | boolean | Trunk/hatch is open |
+| `anyDoorOpen` | boolean | Any door is open |
+| `doors.driverOpen` | boolean | Driver door open |
+| `doors.passengerOpen` | boolean | Passenger door open |
+| `doors.rearLeftOpen` | boolean | Rear left door open |
+| `doors.rearRightOpen` | boolean | Rear right door open |
+
+#### Range Subobject (optional, only if valid)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `totalKm` | integer | Total estimated range (km) |
+| `electricKm` | integer | Electric range (km) |
+| `displayKm` | integer | Range shown on cluster (km) |
+| `consumption` | float | Current consumption (kWh/100km or km/kWh) |
+| `tendency` | string | Range trend: `stable`, `increasing`, `decreasing`, `unknown` |
+| `reserveWarning` | boolean | Low range warning active |
+
+#### CAN GPS Subobject (optional, only if valid fix)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `lat` | float | Latitude (degrees) |
+| `lng` | float | Longitude (degrees) |
+| `alt` | float | Altitude (meters) |
+| `heading` | float | Heading (degrees, 0-359.9) |
+| `satellites` | integer | Satellites in use |
+| `fixType` | string | Fix type: `None`, `2D`, `3D`, `DGPS` |
+| `hdop` | float | Horizontal dilution of precision |
+
+#### Climate Subobject
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `insideTemp` | float | Inside temperature (°C) |
+| `outsideTemp` | float | Outside temperature (°C) |
+| `standbyHeating` | boolean | Standby heating active |
+| `standbyVent` | boolean | Standby ventilation active |
+
+#### Plug Subobject (optional, only if valid from BAP)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `plugged` | boolean | Charging cable is plugged in |
+| `hasSupply` | boolean | Charging station has power supply |
+| `state` | string | Plug state: `plugged`, `unplugged`, `unknown` |
+
+#### BAP Charge Subobject (optional, only if valid from BAP)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mode` | string | Charge mode: `off`, `AC`, `DC`, `conditioning`, `AC+cond`, `DC+cond`, `init` |
+| `status` | string | Charge status: `idle`, `running`, `conservation`, `completed`, `aborted:*`, `init` |
+| `soc` | integer | SOC from charge controller (%) |
+| `remainingMin` | integer | Minutes to full charge |
+| `targetSoc` | integer | Target SOC setting (%) |
+| `amps` | integer | Charging current (A) |
+
+#### BAP Climate Subobject (optional, only if valid from BAP)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `active` | boolean | Climate control is active |
+| `heating` | boolean | Heating is on |
+| `cooling` | boolean | Cooling is on |
+| `ventilation` | boolean | Ventilation is on |
+| `autoDefrost` | boolean | Auto defrost enabled |
+| `currentTemp` | float | Current cabin temperature (°C) |
+| `remainingMin` | integer | Remaining climate time (minutes) |
+
+#### Top-level Vehicle Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `vehicleAwake` | boolean | Vehicle CAN bus is active (received data in last 5s) |
+| `canFrameCount` | integer | Total CAN frames processed since boot |
+
 ---
 
 ## Events

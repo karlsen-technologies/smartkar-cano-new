@@ -7,7 +7,10 @@
 #include "../vehicle/VehicleManager.h"
 #include "../providers/DeviceProvider.h"
 #include "../providers/NetworkProvider.h"
+#include "../providers/VehicleProvider.h"
 #include "../handlers/SystemHandler.h"
+#include "../handlers/VehicleHandler.h"
+#include "../handlers/ChargingProfileHandler.h"
 
 #include <Arduino.h>
 #include "esp_sleep.h"
@@ -151,15 +154,23 @@ void DeviceController::initProvidersAndHandlers() {
     
     networkProvider = new NetworkProvider(modemManager, linkManager);
     
+    vehicleProvider = new VehicleProvider(vehicleManager);
+    vehicleProvider->setCommandRouter(commandRouter);  // Enable event emission
+    
     // Create command handlers
     systemHandler = new SystemHandler(this, commandRouter);
+    vehicleHandler = new VehicleHandler(vehicleManager, commandRouter);
+    chargingProfileHandler = new ChargingProfileHandler(vehicleManager, commandRouter);
     
     // Register providers with CommandRouter
     commandRouter->registerProvider(deviceProvider);
     commandRouter->registerProvider(networkProvider);
+    commandRouter->registerProvider(vehicleProvider);
     
     // Register handlers with CommandRouter
     commandRouter->registerHandler(systemHandler);
+    commandRouter->registerHandler(vehicleHandler);
+    commandRouter->registerHandler(chargingProfileHandler);
     
     Serial.println("[DEVICE] Providers and handlers initialized");
 }
@@ -190,6 +201,11 @@ void DeviceController::loopModules() {
     linkManager->loop();
     canManager->loop();
     vehicleManager->loop();
+    
+    // Check for vehicle state changes and emit events
+    if (vehicleProvider) {
+        vehicleProvider->checkAndEmitEvents();
+    }
 }
 
 void DeviceController::reportActivity() {

@@ -3,6 +3,11 @@
 This document defines the features needed to replicate OCU (Online Connectivity Unit) 
 functionality for remote car control and monitoring via an app.
 
+**Related Documentation:**
+- [BAP_BATTERY_CONTROL.md](BAP_BATTERY_CONTROL.md) - How to implement charging and climate commands
+- [CAN_IDS.md](CAN_IDS.md) - CAN IDs for each feature
+- [HORN_FLASH_LOCK.md](HORN_FLASH_LOCK.md) - Horn, flash, lock implementation
+
 ## Feature Overview
 
 | Category | Feature | Read | Write | Priority |

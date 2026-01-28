@@ -3,7 +3,7 @@
 #include "protocols/BapProtocol.h"
 
 VehicleManager::VehicleManager(CanManager *canMgr)
-    : canManager(canMgr), bodyDomain(state, this), batteryDomain(state, this), driveDomain(state, this), climateDomain(state, this), gpsDomain(state, this), rangeDomain(state, this), bapDomain(state, this)
+    : canManager(canMgr), bodyDomain(state, this), batteryDomain(state, this), driveDomain(state, this), climateDomain(state, this), gpsDomain(state, this), rangeDomain(state, this), bapDomain(state, this), profileManager(this)
 {
 }
 
@@ -20,12 +20,13 @@ bool VehicleManager::setup()
 
     Serial.println("[VehicleManager] Domains initialized:");
     Serial.println("[VehicleManager]   - BodyDomain (0x3D0, 0x3D1, 0x583)");
-    Serial.println("[VehicleManager]   - BatteryDomain (0x5CA, 0x59E)");
+    Serial.println("[VehicleManager]   - BatteryDomain (0x5CA, 0x59E, 0x483)");
     Serial.println("[VehicleManager]   - DriveDomain (0x3C0, 0x0FD, 0x6B2)");
     Serial.println("[VehicleManager]   - ClimateDomain (0x66E, 0x5E1)");
     Serial.println("[VehicleManager]   - GpsDomain (0x484, 0x485, 0x486)");
     Serial.println("[VehicleManager]   - RangeDomain (0x5F5, 0x5F7)");
     Serial.println("[VehicleManager]   - BapDomain (0x17332510 BAP RX)");
+    Serial.println("[VehicleManager]   - ChargingProfileManager (high-level charging/climate API)");
     Serial.println("[VehicleManager] Thread-safe state access enabled (CAN task on Core 0)");
 
     return true;
@@ -99,7 +100,7 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc
         if (gpsDomain.processFrame(canId, data, dlc)) gpsFrames++;
         else unhandledFrames++;
         break;
-    case 0x59E: case 0x5CA:
+    case 0x483: case 0x59E: case 0x5CA:
         if (batteryDomain.processFrame(canId, data, dlc)) batteryFrames++;
         else unhandledFrames++;
         break;
@@ -211,13 +212,13 @@ void VehicleManager::logStatistics()
 
     // Battery status
     const BatteryState &batt = snapshot.battery;
-    uint32_t bms07, bms06;
-    batteryDomain.getFrameCounts(bms07, bms06);
-    Serial.printf("[VehicleManager] Battery frames: 0x5CA:%lu 0x59E:%lu\r\n", bms07, bms06);
-    Serial.printf("[VehicleManager] Battery: energy=%.0f/%.0fWh (%.0f%%) temp=%.1f°C\r\n",
+    uint32_t bms07, bms06, motorHybrid06;
+    batteryDomain.getFrameCounts(bms07, bms06, motorHybrid06);
+    Serial.printf("[VehicleManager] Battery frames: 0x5CA:%lu 0x59E:%lu 0x483:%lu\r\n", bms07, bms06, motorHybrid06);
+    Serial.printf("[VehicleManager] Battery: energy=%.0f/%.0fWh (%.0f%%) temp=%.1f°C power=%.2fkW\r\n",
                   batt.energyWh, batt.maxEnergyWh,
                   batt.maxEnergyWh > 0 ? (batt.energyWh / batt.maxEnergyWh * 100.0f) : 0.0f,
-                  batt.temperature);
+                  batt.temperature, batt.powerKw);
     Serial.printf("[VehicleManager] Charging: %s, Balancing: %s\r\n",
                   batt.chargingActive ? "YES" : "no",
                   batt.balancingActive ? "YES" : "no");

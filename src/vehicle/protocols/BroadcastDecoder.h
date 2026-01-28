@@ -635,4 +635,45 @@ inline Reichweite02Data decodeReichweite02(const uint8_t* data) {
     return result;
 }
 
+// ============================================================================
+// Motor/Hybrid signals - Power meter
+// ============================================================================
+
+/**
+ * Motor_Hybrid_06 (0x483) - Power meter limits
+ * 
+ * Contains the powermeter signal that shows charging power or climate power.
+ * This message is forwarded from powertrain CAN to comfort CAN via gateway.
+ * 
+ * MO_Powermeter_Charge_Grenze at bits 18|10@LE gives power in ~10W units.
+ * - During AC charging: actual charging power from grid (741 ≈ 7.4kW)
+ * - During climate: HVAC power consumption (up to ~10kW for cold start)
+ */
+struct MotorHybrid06Data {
+    uint16_t powermeterGrenze;      // Mo_Powermeter_Grenze: general limit
+    uint16_t chargeGrenze;          // MO_Powermeter_Charge_Grenze: charge/climate power
+    uint16_t strategicLimit;        // MO_Powermeter_Grenze_strategisch
+    float powerKw;                  // Converted to kW (~10W per unit)
+};
+
+inline MotorHybrid06Data decodeMotorHybrid06(const uint8_t* data) {
+    MotorHybrid06Data result;
+    
+    // Mo_Powermeter_Grenze: bits 0|12@LE, scale=1
+    result.powermeterGrenze = extractSignalLE(data, 0, 12);
+    
+    // MO_Powermeter_Charge_Grenze: bits 18|10@LE, scale=1
+    // This is the key signal for charging/climate power
+    result.chargeGrenze = extractSignalLE(data, 18, 10);
+    
+    // MO_Powermeter_Grenze_strategisch: bits 28|12@LE, scale=1
+    result.strategicLimit = extractSignalLE(data, 28, 12);
+    
+    // Convert to kW: approximately 10W per unit
+    // 741 units ≈ 7.4kW (matches e-Golf's 7.2kW AC charging max)
+    result.powerKw = result.chargeGrenze * 0.01f;
+    
+    return result;
+}
+
 } // namespace BroadcastDecoder

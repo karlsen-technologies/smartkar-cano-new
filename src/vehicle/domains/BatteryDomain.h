@@ -13,6 +13,7 @@ class VehicleManager;
  * Listens to:
  *   0x5CA (BMS_07)  - Charging status, balancing, energy content
  *   0x59E (BMS_06)  - Battery temperature
+ *   0x483 (Motor_Hybrid_06) - Power meter for charging/climate power (kW)
  * 
  * NOTE: Core battery signals (0x191, 0x509, 0x2AE) are NOT on comfort CAN!
  * They are on the powertrain CAN bus. For SOC%, use BAP protocol instead.
@@ -22,8 +23,9 @@ class VehicleManager;
 class BatteryDomain {
 public:
     // CAN IDs this domain handles (comfort CAN only)
-    static constexpr uint32_t CAN_ID_BMS_07 = 0x5CA;    // Charging status, energy
-    static constexpr uint32_t CAN_ID_BMS_06 = 0x59E;    // Battery temperature
+    static constexpr uint32_t CAN_ID_BMS_07 = 0x5CA;           // Charging status, energy
+    static constexpr uint32_t CAN_ID_BMS_06 = 0x59E;           // Battery temperature
+    static constexpr uint32_t CAN_ID_MOTOR_HYBRID_06 = 0x483;  // Power meter (kW)
     
     /**
      * Construct the battery domain.
@@ -59,6 +61,9 @@ public:
     // From BMS_06 (0x59E)
     float temperature() const { return vehicleState.battery.temperature; }
     
+    // From Motor_Hybrid_06 (0x483)
+    float powerKw() const { return vehicleState.battery.powerKw; }
+    
     /**
      * Calculate energy percentage (current/max).
      */
@@ -72,11 +77,12 @@ public:
     // Frame counters for debugging
     uint32_t bms07Count = 0;
     uint32_t bms06Count = 0;
+    uint32_t motorHybrid06Count = 0;
     
 public:
     // Debug: get frame counts
-    void getFrameCounts(uint32_t& bms07, uint32_t& bms06) const {
-        bms07 = bms07Count; bms06 = bms06Count;
+    void getFrameCounts(uint32_t& bms07, uint32_t& bms06, uint32_t& motorHybrid06) const {
+        bms07 = bms07Count; bms06 = bms06Count; motorHybrid06 = motorHybrid06Count;
     }
     
 private:
@@ -86,4 +92,5 @@ private:
     // Process specific message types
     void processBMS07(const uint8_t* data);
     void processBMS06(const uint8_t* data);
+    void processMotorHybrid06(const uint8_t* data);
 };

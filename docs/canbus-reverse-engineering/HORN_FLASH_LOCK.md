@@ -3,6 +3,10 @@
 This document covers the simple CAN messages for horn, flash, and door lock commands.
 These are **NOT** BAP protocol - they are standard CAN broadcast messages.
 
+**Related Documentation:**
+- [CAN_IDS.md](CAN_IDS.md) - All CAN IDs reference
+- [BAP_BATTERY_CONTROL.md](BAP_BATTERY_CONTROL.md) - Climate and charging (uses BAP protocol)
+
 ## TM_01 Message (Telematics/Remote Control)
 
 **CAN ID:** `0x5A7` (1447 decimal)  
