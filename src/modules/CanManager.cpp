@@ -7,6 +7,12 @@ CanManager::~CanManager() {
     if (state != CanState::OFF) {
         stop();
     }
+    
+    // Clean up semaphore
+    if (taskExitedSemaphore != nullptr) {
+        vSemaphoreDelete(taskExitedSemaphore);
+        taskExitedSemaphore = nullptr;
+    }
 }
 
 bool CanManager::setup() {
@@ -107,6 +113,11 @@ bool CanManager::start() {
     lastStatusCheck = millis();
     lastTestMessage = millis();
     
+    // Create synchronization semaphore for task exit
+    if (taskExitedSemaphore == nullptr) {
+        taskExitedSemaphore = xSemaphoreCreateBinary();
+    }
+    
     // Start the dedicated CAN receive task on Core 0
     taskRunning = true;
     BaseType_t taskResult = xTaskCreatePinnedToCore(
@@ -144,11 +155,27 @@ bool CanManager::stop() {
     
     // Stop the CAN task first
     if (canTaskHandle != nullptr) {
+        // Signal task to stop
         taskRunning = false;
-        // Give the task time to exit gracefully
-        vTaskDelay(pdMS_TO_TICKS(50));
-        // Delete the task if it's still running
-        vTaskDelete(canTaskHandle);
+        
+        // Wait for task to signal that it has exited (timeout 200ms)
+        if (taskExitedSemaphore != nullptr) {
+            if (xSemaphoreTake(taskExitedSemaphore, pdMS_TO_TICKS(200)) == pdTRUE) {
+                Serial.println("[CAN] Task exited gracefully");
+            } else {
+                Serial.println("[CAN] Task exit timeout - forcing deletion");
+            }
+        } else {
+            // No semaphore, wait a short time
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        
+        // Task should have already deleted itself, but check just in case
+        if (eTaskGetState(canTaskHandle) != eDeleted) {
+            vTaskDelete(canTaskHandle);
+            Serial.println("[CAN] Task forcefully deleted");
+        }
+        
         canTaskHandle = nullptr;
         Serial.println("[CAN] CAN task stopped");
     }
@@ -202,7 +229,7 @@ void CanManager::canTaskLoop() {
             
             // After receiving one message, drain any others in the queue
             // Use non-blocking receive to get all pending messages
-            while (twai_receive(&message, 0) == ESP_OK) {
+            while (taskRunning && twai_receive(&message, 0) == ESP_OK) {
                 messageCount++;
                 
                 if (frameCallback) {
@@ -222,7 +249,13 @@ void CanManager::canTaskLoop() {
         // ESP_ERR_TIMEOUT is normal - just means no message in the timeout period
     }
     
-    Serial.println("[CAN] Task exiting");
+    Serial.println("[CAN] Task exiting gracefully");
+    
+    // Signal that we've exited
+    if (taskExitedSemaphore != nullptr) {
+        xSemaphoreGive(taskExitedSemaphore);
+    }
+    
     vTaskDelete(NULL);
 }
 

@@ -159,6 +159,7 @@ private:
     // Dedicated CAN task
     TaskHandle_t canTaskHandle = nullptr;
     volatile bool taskRunning = false;
+    SemaphoreHandle_t taskExitedSemaphore = nullptr;
     static void canTaskEntry(void* param);
     void canTaskLoop();
 
