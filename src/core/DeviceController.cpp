@@ -232,86 +232,48 @@ void DeviceController::requestSleep(unsigned long durationSeconds) {
 
 bool DeviceController::canSleep() {
     unsigned long now = millis();
-    
-    // Rate limit diagnostic logging to once per 5 seconds
-    bool shouldLog = (now - lastSleepLogTime) > 5000;
 
     // Must be awake for minimum time (unless sleep was explicitly requested)
     if (!sleepRequested && (now - bootTime) < config.minAwakeTime) {
-        if (shouldLog) {
-            Serial.printf("[DEVICE] Cannot sleep: boot time %lums ago (need %lums)\r\n",
-                         now - bootTime, config.minAwakeTime);
-            lastSleepLogTime = now;
-        }
         return false;
     }
 
     // If vehicle CAN bus is active, stay awake (skip if sleep was explicitly requested)
     if (!sleepRequested && vehicleManager && vehicleManager->isVehicleAwake()) {
-        if (shouldLog) {
-            Serial.println("[DEVICE] Cannot sleep: Vehicle CAN bus is active");
-            lastSleepLogTime = now;
-        }
         return false;
     }
 
     // Check activity timeout for non-vehicle activity (skip if sleep was explicitly requested)
     if (!sleepRequested && (now - lastActivityTime) < config.activityTimeout) {
-        if (shouldLog) {
-            Serial.printf("[DEVICE] Cannot sleep: activity %lums ago (need %lums)\r\n",
-                         now - lastActivityTime, config.activityTimeout);
-            lastSleepLogTime = now;
-        }
         return false;
     }
 
     // Check if any module is busy
     if (powerManager->isBusy()) {
-        if (shouldLog) {
-            Serial.println("[DEVICE] Cannot sleep: PowerManager is busy");
-            lastSleepLogTime = now;
-        }
         return false;
     }
 
     if (modemManager->isBusy()) {
-        if (shouldLog) {
-            Serial.println("[DEVICE] Cannot sleep: ModemManager is busy");
-            lastSleepLogTime = now;
-        }
         return false;
     }
 
     if (linkManager->isBusy()) {
-        if (shouldLog) {
-            Serial.println("[DEVICE] Cannot sleep: LinkManager is busy");
-            lastSleepLogTime = now;
-        }
         return false;
     }
 
     if (canManager->isBusy()) {
-        if (shouldLog) {
-            Serial.println("[DEVICE] Cannot sleep: CanManager is busy");
-            lastSleepLogTime = now;
-        }
         return false;
     }
 
-    Serial.println("[DEVICE] Sleep conditions met, can sleep");
     return true;
 }
 
 void DeviceController::prepareForSleep() {
-    Serial.println("[DEVICE] Preparing modules for sleep...");
-    
     // Prepare modules in reverse dependency order
     canManager->prepareForSleep();
     linkManager->prepareForSleep();
     modemManager->prepareForSleep();
     powerManager->prepareForSleep();
-
-    Serial.println("[DEVICE] All modules prepared for sleep");
 }
 
 void DeviceController::enterSleep() {

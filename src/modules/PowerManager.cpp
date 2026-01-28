@@ -116,12 +116,10 @@ void PowerManager::loop() {
 }
 
 void PowerManager::prepareForSleep() {
-    Serial.println("[POWER] Preparing for sleep");
-    
     // Switch to minimal IRQ set for sleep - only critical events
     configureSleepIrqs();
     
-    // Enable wakeup source before sleep
+    // Enable wakeup sources before sleep
     enableDeepSleepWakeup();
 }
 
@@ -156,10 +154,6 @@ void PowerManager::enableDeepSleepWakeup() {
     // - GPIO6: PMU IRQ - low battery warning, USB connect, etc.
     // - GPIO21: CAN RX - CAN bus activity (vehicle wake)
     
-    // Debug: print current pin states before configuring
-    Serial.printf("[POWER] Pin states before sleep - GPIO3: %d, GPIO6: %d, GPIO21: %d\r\n",
-        digitalRead(GPIO_NUM_3), digitalRead(PMU_INPUT_PIN), digitalRead(GPIO_NUM_21));
-    
     // Setup modem RI pin (GPIO3)
     rtc_gpio_init(GPIO_NUM_3);
     rtc_gpio_set_direction(GPIO_NUM_3, RTC_GPIO_MODE_INPUT_ONLY);
@@ -173,17 +167,17 @@ void PowerManager::enableDeepSleepWakeup() {
     rtc_gpio_pullup_en((gpio_num_t)PMU_INPUT_PIN);  // PMU IRQ is active low, needs pullup
     
     // Setup CAN RX pin (GPIO21) - CAN idles high (recessive), goes low on activity
+    // IMPORTANT: VP231 transceiver actively drives RXD line - NO pull-up needed!
+    // Transceiver outputs 3.3V when idle (recessive), 0V when active (dominant)
     rtc_gpio_init(GPIO_NUM_21);
     rtc_gpio_set_direction(GPIO_NUM_21, RTC_GPIO_MODE_INPUT_ONLY);
     rtc_gpio_pulldown_dis(GPIO_NUM_21);
-    rtc_gpio_pullup_dis(GPIO_NUM_21);  // Transceiver handles the level
+    rtc_gpio_pullup_dis(GPIO_NUM_21);  // NO pull-up - transceiver drives the line
     
     // Wake on LOW level on any pin (all are active low)
     // CAN idles high (recessive), goes low when there's bus activity (dominant)
     uint64_t wakeMask = (1ULL << GPIO_NUM_3) | (1ULL << PMU_INPUT_PIN) | (1ULL << GPIO_NUM_21);
     esp_sleep_enable_ext1_wakeup(wakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
-    
-    Serial.printf("[POWER] Deep sleep wakeup enabled on GPIO3 (RI), GPIO%d (PMU), GPIO21 (CAN RX)\r\n", PMU_INPUT_PIN);
 }
 
 void PowerManager::disableDeepSleepWakeup() {
