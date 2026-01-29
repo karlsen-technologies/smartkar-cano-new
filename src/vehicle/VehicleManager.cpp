@@ -50,6 +50,12 @@ bool VehicleManager::setup()
 
 void VehicleManager::loop()
 {
+    // Clear initialization flag after first loop iteration
+    // This allows CAN activity tracking after startup is complete
+    if (canInitializing) {
+        canInitializing = false;
+    }
+    
     // Update wake state machine (from main loop on Core 1)
     updateWakeStateMachine();
 
@@ -60,12 +66,11 @@ void VehicleManager::loop()
     profileManager.loop();
 
     // Periodic statistics logging (from main loop on Core 1)
-    // DISABLED - reduces serial output noise
-    // if (millis() - lastLogTime > LOG_INTERVAL)
-    // {
-    //     logStatistics();
-    //     lastLogTime = millis();
-    // }
+    if (millis() - lastLogTime > LOG_INTERVAL)
+    {
+        logStatistics();
+        lastLogTime = millis();
+    }
 }
 
 // =============================================================================
@@ -128,8 +133,11 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc
         return;
     }
 
-    // Count every frame
-    state.markCanActivity();
+    // Count every frame, but only mark activity after initialization
+    // This prevents spurious "vehicle awake" detection during CAN startup
+    if (!canInitializing) {
+        state.markCanActivity();
+    }
 
     // Extended frames: only BAP
     if (extended)

@@ -88,13 +88,14 @@ bool PowerManager::setup() {
     // These include informational events that we want to log while awake
     configureAwakeIrqs();
     
-    // Setup PMU IRQ pin interrupt
+    // Disable deep sleep wakeup BEFORE setting up GPIO interrupts
+    // This clears EXT1 configuration that might conflict with attachInterrupt
+    disableDeepSleepWakeup();
+    
+    // Setup PMU IRQ pin interrupt (now safe after clearing EXT1)
     pinMode(PMU_INPUT_PIN, INPUT);
     attachInterrupt(digitalPinToInterrupt(PMU_INPUT_PIN), pmuIrqHandler, FALLING);
     Serial.printf("[POWER] PMU IRQ enabled on GPIO%d\r\n", PMU_INPUT_PIN);
-
-    // Disable deep sleep wakeup during normal operation
-    disableDeepSleepWakeup();
 
     initialized = true;
     Serial.println("OK!");

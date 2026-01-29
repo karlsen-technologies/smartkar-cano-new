@@ -118,6 +118,7 @@ private:
     // Reconnection
     unsigned long lastConnectAttempt = 0;
     int connectAttempts = 0;
+    bool adoptedConnection = false;  // Track if we've adopted existing connection after wake
 
     // State machine helpers
     bool stateJustChanged();

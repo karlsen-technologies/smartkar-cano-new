@@ -163,8 +163,8 @@ void ChargingProfileManager::processProfilesArray(const uint8_t* payload, uint8_
     uint8_t startIndex = payload[3];
     uint8_t elementCount = payload[4];
     
-    Serial.printf("[ProfileMgr] ProfilesArray: total=%d, recordAddr=%d, start=%d, count=%d, posTransmit=%d\r\n",
-                  totalElements, recordAddr, startIndex, elementCount, posTransmit);
+    Serial.printf("[ProfileMgr] ProfilesArray: %d profiles from idx %d\r\n",
+                  elementCount, startIndex);
     
     // Skip header bytes (5 bytes for STATUS format, or more if LargeIdx=1)
     uint8_t headerSize = largeIdx ? 7 : 5;  // 16-bit indexes use 2 more bytes
@@ -255,12 +255,8 @@ bool ChargingProfileManager::parseFullProfile(uint8_t profileIndex,
     p.valid = true;
     p.lastUpdate = millis();
     
-    Serial.printf("[ProfileMgr] Profile %d: op=0x%02X, temp=%.1fC, soc=%d%%, maxA=%d",
-                  profileIndex, p.operation, p.getTemperature(), p.targetChargeLevel, p.maxCurrent);
-    if (p.nameLength > 0) {
-        Serial.printf(", name='%s'", p.name);
-    }
-    Serial.println(" [VALID]");
+    Serial.printf("[ProfileMgr] Profile %d: op=0x%02X, soc=%d%%, maxA=%d [VALID]\r\n",
+                  profileIndex, p.operation, p.targetChargeLevel, p.maxCurrent);
     
     return true;
 }

@@ -195,6 +195,7 @@ private:
     // Wake state machine
     WakeState wakeState = WakeState::ASLEEP;
     unsigned long wakeStateStartTime = 0;  // When current state was entered
+    bool canInitializing = true;            // Ignore CAN activity during first loop after init
     
     // Keep-alive management
     bool keepAliveActive = false;

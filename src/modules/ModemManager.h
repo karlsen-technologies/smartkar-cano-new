@@ -6,6 +6,7 @@
 
 #include <Arduino.h>
 #include <TinyGsmClient.h>
+#include "../modem/TinyGsmSim7080Extended.h"
 #include "../core/IModule.h"
 
 // Forward declarations
@@ -97,10 +98,16 @@ public:
     bool isConnected() { return state == ModemState::CONNECTED; }
 
     /**
+     * Check if modem did a hotstart (was already powered on boot).
+     * This indicates we may have persistent TCP connections to adopt.
+     */
+    bool wasHotstart() { return didHotstart; }
+
+    /**
      * Get the TinyGsm modem instance for TCP client creation.
      * Only valid when modem is connected.
      */
-    TinyGsm* getModem() { return modem; }
+    TinyGsmSim7080Extended* getModem() { return modem; }
 
     /**
      * Create a TCP client for the LinkManager.
@@ -138,11 +145,12 @@ private:
     static ModemManager* _instance;
     
     PowerManager* powerManager = nullptr;
-    TinyGsm* modem = nullptr;
+    TinyGsmSim7080Extended* modem = nullptr;
     ActivityCallback activityCallback = nullptr;
 
     ModemState state = ModemState::OFF;
     ModemState previousState = ModemState::OFF;
+    bool didHotstart = false;  // Track if modem did hotstart (for TCP connection adoption)
     
     // Timing
     unsigned long stateEntryTime = 0;
