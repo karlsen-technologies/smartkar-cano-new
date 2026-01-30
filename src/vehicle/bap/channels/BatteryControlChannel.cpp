@@ -1,6 +1,7 @@
 #include "BatteryControlChannel.h"
 #include "../../VehicleManager.h"
 #include "../../../core/CommandRouter.h"
+#include "../../../core/CommandStateManager.h"
 #include <ArduinoJson.h>
 
 using namespace BapProtocol;
@@ -396,12 +397,9 @@ bool BatteryControlChannel::requestClimateState() {
     return sendBapFrame(frame, 8);
 }
 
-bool BatteryControlChannel::startClimate(float tempCelsius, bool allowBattery) {
-    // Check if busy
-    if (isBusy()) {
-        Serial.println("[BatteryControl] Busy - command rejected");
-        return false;
-    }
+bool BatteryControlChannel::startClimate(int commandId, float tempCelsius, bool allowBattery) {
+    // Store command ID for tracking
+    currentCommandId = commandId;
     
     // Store command parameters
     pendingCommand = PendingCommand::START_CLIMATE;
@@ -424,6 +422,7 @@ bool BatteryControlChannel::startClimate(float tempCelsius, bool allowBattery) {
                 Serial.println("[BatteryControl] Profile update system busy");
                 commandsQueued--;  // Undo queue increment
                 pendingCommand = PendingCommand::NONE;
+                currentCommandId = -1;
                 return false;
             }
         } else {
@@ -438,12 +437,9 @@ bool BatteryControlChannel::startClimate(float tempCelsius, bool allowBattery) {
     return true;
 }
 
-bool BatteryControlChannel::stopClimate() {
-    // Check if busy
-    if (isBusy()) {
-        Serial.println("[BatteryControl] Busy - command rejected");
-        return false;
-    }
+bool BatteryControlChannel::stopClimate(int commandId) {
+    // Store command ID for tracking
+    currentCommandId = commandId;
     
     // Queue command
     pendingCommand = PendingCommand::STOP_CLIMATE;
@@ -455,12 +451,9 @@ bool BatteryControlChannel::stopClimate() {
     return true;
 }
 
-bool BatteryControlChannel::startCharging(uint8_t targetSoc, uint8_t maxCurrent) {
-    // Check if busy
-    if (isBusy()) {
-        Serial.println("[BatteryControl] Busy - command rejected");
-        return false;
-    }
+bool BatteryControlChannel::startCharging(int commandId, uint8_t targetSoc, uint8_t maxCurrent) {
+    // Store command ID for tracking
+    currentCommandId = commandId;
     
     // Store command parameters
     pendingCommand = PendingCommand::START_CHARGING;
@@ -525,6 +518,7 @@ bool BatteryControlChannel::startCharging(uint8_t targetSoc, uint8_t maxCurrent)
                     commandsFailed++;
                     emitCommandEvent("commandFailed", "profile_update_failed");
                     pendingCommand = PendingCommand::NONE;
+                    currentCommandId = -1;
                 }
             };
             
@@ -535,6 +529,7 @@ bool BatteryControlChannel::startCharging(uint8_t targetSoc, uint8_t maxCurrent)
                 Serial.println("[BatteryControl] Profile update system busy");
                 commandsQueued--;  // Undo queue increment
                 pendingCommand = PendingCommand::NONE;
+                currentCommandId = -1;
                 return false;
             }
         } else {
@@ -549,12 +544,9 @@ bool BatteryControlChannel::startCharging(uint8_t targetSoc, uint8_t maxCurrent)
     return true;
 }
 
-bool BatteryControlChannel::stopCharging() {
-    // Check if busy
-    if (isBusy()) {
-        Serial.println("[BatteryControl] Busy - command rejected");
-        return false;
-    }
+bool BatteryControlChannel::stopCharging(int commandId) {
+    // Store command ID for tracking
+    currentCommandId = commandId;
     
     // Queue command
     pendingCommand = PendingCommand::STOP_CHARGING;
@@ -953,6 +945,55 @@ void BatteryControlChannel::setCommandState(CommandState newState) {
                      }());
         commandState = newState;
         commandStateStartTime = millis();
+        
+        // Update CommandStateManager with stage transitions
+        CommandStateManager* csm = CommandStateManager::getInstance();
+        
+        switch (newState) {
+            case CommandState::REQUESTING_WAKE:
+                csm->updateStage(CommandStateManager::Stage::REQUESTING_WAKE);
+                break;
+                
+            case CommandState::WAITING_FOR_WAKE:
+                csm->updateStage(CommandStateManager::Stage::WAITING_FOR_WAKE);
+                break;
+                
+            case CommandState::UPDATING_PROFILE:
+                csm->updateStage(CommandStateManager::Stage::UPDATING_PROFILE);
+                break;
+                
+            case CommandState::SENDING_COMMAND:
+                csm->updateStage(CommandStateManager::Stage::SENDING_COMMAND);
+                break;
+                
+            case CommandState::DONE:
+                csm->completeCommand();
+                currentCommandId = -1;  // Clear command ID
+                break;
+                
+            case CommandState::FAILED: {
+                // Get failure reason based on current state
+                const char* reason = "Command execution failed";
+                unsigned long elapsed = millis() - commandStateStartTime;
+                
+                // Determine specific failure reason
+                if (commandState == CommandState::WAITING_FOR_WAKE && elapsed >= COMMAND_WAKE_TIMEOUT) {
+                    reason = "Wake timeout after 15000ms";
+                } else if (commandState == CommandState::UPDATING_PROFILE) {
+                    reason = "Profile update failed";
+                } else if (commandState == CommandState::SENDING_COMMAND) {
+                    reason = "Failed to send command to vehicle";
+                }
+                
+                csm->failCommand(reason);
+                currentCommandId = -1;  // Clear command ID
+                break;
+            }
+                
+            case CommandState::IDLE:
+                // No update needed
+                break;
+        }
     }
 }
 

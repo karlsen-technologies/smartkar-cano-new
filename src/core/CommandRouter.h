@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 #include "ICommandHandler.h"
 #include "ITelemetryProvider.h"
+#include "CommandStateManager.h"
 
 // Maximum number of handlers/providers that can be registered
 #define MAX_COMMAND_HANDLERS 8

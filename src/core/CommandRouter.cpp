@@ -1,4 +1,5 @@
 #include "CommandRouter.h"
+#include "CommandStateManager.h"
 
 CommandRouter* CommandRouter::_instance = nullptr;
 
@@ -12,6 +13,14 @@ CommandRouter::CommandRouter() {
     for (size_t i = 0; i < MAX_TELEMETRY_PROVIDERS; i++) {
         providers[i] = nullptr;
     }
+    
+    // Set response sender for CommandStateManager
+    CommandStateManager::getInstance()->setResponseSender([](const String& message) -> bool {
+        if (_instance && _instance->responseSender) {
+            return _instance->responseSender(message);
+        }
+        return false;
+    });
 }
 
 bool CommandRouter::registerHandler(ICommandHandler* handler) {
@@ -45,15 +54,39 @@ bool CommandRouter::registerProvider(ITelemetryProvider* provider) {
 void CommandRouter::handleCommand(const String& action, int id, JsonObject& params) {
     Serial.printf("[ROUTER] Command: %s (id=%d)\r\n", action.c_str(), id);
     
-    // Try built-in system commands first
+    // Try built-in system commands first (they bypass busy check)
     if (handleSystemCommand(action, id, params)) {
+        return;
+    }
+    
+    // Check if another command is active (BUSY CHECK)
+    CommandStateManager* csm = CommandStateManager::getInstance();
+    if (csm->hasActiveCommand()) {
+        // Build busy response with current command info
+        Serial.printf("[ROUTER] Busy - rejecting command %d (current: %d)\r\n", 
+                      id, csm->getCurrentCommandId());
+        
+        JsonDocument busyDoc;
+        JsonObject busyData = busyDoc["data"].to<JsonObject>();
+        busyData["id"] = id;
+        busyData["ok"] = false;
+        busyData["status"] = "busy";
+        busyData["error"] = "Another command is in progress";
+        
+        JsonObject currentCmd = busyData["currentCommand"].to<JsonObject>();
+        csm->getCurrentCommandInfo(currentCmd);
+        
+        // Send and return
+        String busyMsg;
+        serializeJson(busyDoc, busyMsg);
+        responseSender(busyMsg);
         return;
     }
     
     // Parse action into domain.actionName
     String domain, actionName;
     if (!parseAction(action, domain, actionName)) {
-        // No domain prefix - try as system command
+        // No domain prefix - unknown command
         sendResponse(id, CommandStatus::NOT_SUPPORTED, "Unknown command format");
         return;
     }
@@ -65,6 +98,9 @@ void CommandRouter::handleCommand(const String& action, int id, JsonObject& para
         return;
     }
     
+    // Start tracking this command
+    csm->startCommand(id, action);
+    
     // Create command context
     CommandContext ctx(id, action, domain, actionName, params);
     ctx.sendAsyncResponse = asyncResponseCallback;
@@ -72,10 +108,25 @@ void CommandRouter::handleCommand(const String& action, int id, JsonObject& para
     // Execute command
     CommandResult result = handler->handleCommand(ctx);
     
-    // Send response (unless async)
-    if (result.status != CommandStatus::PENDING) {
-        sendResponse(id, result.status, result.message.c_str(), 
-                     result.data.size() > 0 ? &result.data : nullptr);
+    // Handle different result statuses
+    if (result.status == CommandStatus::PENDING) {
+        // Command accepted and executing in background
+        // CommandStateManager will send further updates
+        return;
+    }
+    
+    if (result.status == CommandStatus::OK) {
+        // Synchronous command completed immediately
+        csm->completeCommand(result.data.size() > 0 ? &result.data : nullptr);
+        return;
+    }
+    
+    // Validation or execution error
+    if (result.status == CommandStatus::INVALID_PARAMS ||
+        result.status == CommandStatus::NOT_SUPPORTED ||
+        result.status == CommandStatus::CMD_ERROR) {
+        csm->failCommand(result.message.c_str());
+        return;
     }
 }
 
@@ -278,8 +329,13 @@ bool CommandRouter::handleSystemCommand(const String& action, int id, JsonObject
 }
 
 void CommandRouter::asyncResponseCallback(int id, CommandResult result) {
-    if (_instance) {
-        _instance->sendResponse(id, result.status, result.message.c_str(),
-                               result.data.size() > 0 ? &result.data : nullptr);
+    CommandStateManager* csm = CommandStateManager::getInstance();
+    
+    if (result.status == CommandStatus::OK) {
+        // Async command completed successfully
+        csm->completeCommand(result.data.size() > 0 ? &result.data : nullptr);
+    } else {
+        // Async command failed
+        csm->failCommand(result.message.c_str());
     }
 }

@@ -78,47 +78,30 @@ CommandResult VehicleHandler::handleStartClimate(CommandContext& ctx) {
     Serial.printf("[VEHICLE] Starting climate control at %.1f°C (battery=%s)\r\n", 
                   tempCelsius, allowBattery ? "yes" : "no");
     
-    // Queue command via BatteryControlChannel (non-blocking)
-    bool queued = vehicleManager->batteryControl().startClimate(tempCelsius, allowBattery);
+    // Queue command via BatteryControlChannel (non-blocking) - pass command ID
+    bool accepted = vehicleManager->batteryControl().startClimate(ctx.id, tempCelsius, allowBattery);
     
-    if (queued) {
-        CommandResult result = CommandResult::ok("Climate start command queued");
-        result.data["temperature"] = tempCelsius;
-        result.data["allowBattery"] = allowBattery;
-        result.data["status"] = "queued";
-        
-        // Emit event for climate start request
-        if (commandRouter) {
-            JsonDocument eventDoc;
-            JsonObject details = eventDoc.to<JsonObject>();
-            details["temperature"] = tempCelsius;
-            details["allowBattery"] = allowBattery;
-            commandRouter->sendEvent("vehicle", "climateStartRequested", &details);
-        }
-        
-        return result;
+    if (accepted) {
+        // Command accepted and will execute in background
+        return CommandResult::pending();
     } else {
-        return CommandResult::error("Command busy - another command in progress");
+        // Shouldn't happen (CommandRouter checks busy), but handle anyway
+        return CommandResult::error("Internal error - command rejected");
     }
 }
 
 CommandResult VehicleHandler::handleStopClimate(CommandContext& ctx) {
     Serial.println("[VEHICLE] Stopping climate control");
     
-    // Queue stop command via BatteryControlChannel (non-blocking)
-    bool queued = vehicleManager->batteryControl().stopClimate();
+    // Queue stop command via BatteryControlChannel (non-blocking) - pass command ID
+    bool accepted = vehicleManager->batteryControl().stopClimate(ctx.id);
     
-    if (queued) {
-        // Emit event for climate stop request
-        if (commandRouter) {
-            commandRouter->sendEvent("vehicle", "climateStopRequested", nullptr);
-        }
-        
-        CommandResult result = CommandResult::ok("Climate stop command queued");
-        result.data["status"] = "queued";
-        return result;
+    if (accepted) {
+        // Command accepted and will execute in background
+        return CommandResult::pending();
     } else {
-        return CommandResult::error("Command busy - another command in progress");
+        // Shouldn't happen (CommandRouter checks busy), but handle anyway
+        return CommandResult::error("Internal error - command rejected");
     }
 }
 
@@ -149,47 +132,30 @@ CommandResult VehicleHandler::handleStartCharging(CommandContext& ctx) {
     
     Serial.printf("[VEHICLE] Charging params: targetSoc=%d%%, maxCurrent=%dA\r\n", targetSoc, maxCurrent);
     
-    // Queue command via BatteryControlChannel (non-blocking)
-    bool queued = vehicleManager->batteryControl().startCharging(targetSoc, maxCurrent);
+    // Queue command via BatteryControlChannel (non-blocking) - pass command ID
+    bool accepted = vehicleManager->batteryControl().startCharging(ctx.id, targetSoc, maxCurrent);
     
-    if (queued) {
-        CommandResult result = CommandResult::ok("Charging start command queued");
-        result.data["targetSoc"] = targetSoc;
-        result.data["maxCurrent"] = maxCurrent;
-        result.data["status"] = "queued";
-        
-        // Emit event for charging start request
-        if (commandRouter) {
-            JsonDocument eventDoc;
-            JsonObject details = eventDoc.to<JsonObject>();
-            details["targetSoc"] = targetSoc;
-            details["maxCurrent"] = maxCurrent;
-            commandRouter->sendEvent("vehicle", "chargingStartRequested", &details);
-        }
-        
-        return result;
+    if (accepted) {
+        // Command accepted and will execute in background
+        return CommandResult::pending();
     } else {
-        return CommandResult::error("Command busy - another command in progress");
+        // Shouldn't happen (CommandRouter checks busy), but handle anyway
+        return CommandResult::error("Internal error - command rejected");
     }
 }
 
 CommandResult VehicleHandler::handleStopCharging(CommandContext& ctx) {
     Serial.println("[VEHICLE] Stopping charging");
     
-    // Queue stop command via BatteryControlChannel (non-blocking)
-    bool queued = vehicleManager->batteryControl().stopCharging();
+    // Queue stop command via BatteryControlChannel (non-blocking) - pass command ID
+    bool accepted = vehicleManager->batteryControl().stopCharging(ctx.id);
     
-    if (queued) {
-        // Emit event for charging stop request
-        if (commandRouter) {
-            commandRouter->sendEvent("vehicle", "chargingStopRequested", nullptr);
-        }
-        
-        CommandResult result = CommandResult::ok("Charging stop command queued");
-        result.data["status"] = "queued";
-        return result;
+    if (accepted) {
+        // Command accepted and will execute in background
+        return CommandResult::pending();
     } else {
-        return CommandResult::error("Command busy - another command in progress");
+        // Shouldn't happen (CommandRouter checks busy), but handle anyway
+        return CommandResult::error("Internal error - command rejected");
     }
 }
 

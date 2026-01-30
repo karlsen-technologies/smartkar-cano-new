@@ -222,29 +222,35 @@ public:
     /**
      * Start climate control (non-blocking).
      * Sets flag, processed in loop() when vehicle awake.
+     * @param commandId Command ID from server for progress tracking
+     * @param tempCelsius Target temperature in Celsius
+     * @param allowBattery Allow climate to use battery power
      * @return true if queued, false if busy with another command
      */
-    bool startClimate(float tempCelsius = 21.0f, bool allowBattery = false);
+    bool startClimate(int commandId, float tempCelsius = 21.0f, bool allowBattery = false);
     
     /**
      * Stop climate control (non-blocking).
+     * @param commandId Command ID from server for progress tracking
      * @return true if queued, false if busy
      */
-    bool stopClimate();
+    bool stopClimate(int commandId);
     
     /**
      * Start charging (non-blocking).
+     * @param commandId Command ID from server for progress tracking
      * @param targetSoc Target state of charge percentage (0-100)
      * @param maxCurrent Maximum charging current in amps
      * @return true if queued, false if busy
      */
-    bool startCharging(uint8_t targetSoc = 80, uint8_t maxCurrent = 32);
+    bool startCharging(int commandId, uint8_t targetSoc = 80, uint8_t maxCurrent = 32);
     
     /**
      * Stop charging (non-blocking).
+     * @param commandId Command ID from server for progress tracking
      * @return true if queued, false if busy
      */
-    bool stopCharging();
+    bool stopCharging(int commandId);
     
     /**
      * Start combined charging and climate (non-blocking).
@@ -282,6 +288,7 @@ private:
     // Command state machine
     CommandState commandState = CommandState::IDLE;
     unsigned long commandStateStartTime = 0;
+    int currentCommandId = -1;  // Command ID for progress tracking
     
     // Pending command data (only ONE can be active at a time)
     enum class PendingCommand {

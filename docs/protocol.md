@@ -1,6 +1,15 @@
 # Protocol Specification
 
+**Protocol Version:** 2.2  
+**Last Updated:** 2026-01-30
+
 This document describes the JSON protocol used for communication between the SmartKar-Cano device and the server. This specification is intended for implementing compatible server software.
+
+## Version History
+
+- **v2.2** (2026-01-30): Added full command lifecycle tracking with progress stages
+- **v2.1**: Previous version with basic command/response
+- **v2.0**: Initial protocol with event system
 
 ## Transport Layer
 
@@ -104,28 +113,108 @@ Sent immediately after TCP connection is established.
 
 ### Response Message (Device → Server)
 
+**Protocol v2.2** introduces full command lifecycle tracking. Commands now send multiple responses throughout their execution:
+
+1. **In-Progress Response** - Sent when command is accepted and during execution stages
+2. **Completed Response** - Sent when command completes successfully
+3. **Failed Response** - Sent if command fails at any stage
+4. **Busy Response** - Sent if another command is already running
+
+**Example: Successful Climate Start (Vehicle Awake)**
 ```json
-{"type":"response","data":{"id":1,"ok":true}}
-{"type":"response","data":{"id":2,"ok":true,"wakeMode":"timer"}}
-{"type":"response","data":{"id":3,"ok":false,"status":"error","error":"Invalid parameter"}}
+// 1. Accepted
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"accepted"}}
+
+// 2. Updating profile
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"updating_profile"}}
+
+// 3. Sending command
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"sending_command"}}
+
+// 4. Completed
+{"type":"response","data":{"id":12,"ok":true,"status":"completed","elapsedMs":2400}}
+```
+
+**Example: Failed Command (Wake Timeout)**
+```json
+// 1. Accepted
+{"type":"response","data":{"id":13,"ok":true,"status":"in_progress","stage":"accepted"}}
+
+// 2. Requesting wake
+{"type":"response","data":{"id":13,"ok":true,"status":"in_progress","stage":"requesting_wake"}}
+
+// 3. Waiting for wake
+{"type":"response","data":{"id":13,"ok":true,"status":"in_progress","stage":"waiting_for_wake"}}
+
+// 4. Failed
+{
+  "type":"response",
+  "data":{
+    "id":13,
+    "ok":false,
+    "status":"failed",
+    "stage":"waiting_for_wake",
+    "error":"Wake timeout after 15000ms",
+    "elapsedMs":15100
+  }
+}
+```
+
+**Example: Busy Response**
+```json
+{
+  "type":"response",
+  "data":{
+    "id":15,
+    "ok":false,
+    "status":"busy",
+    "error":"Another command is in progress",
+    "currentCommand":{
+      "id":12,
+      "action":"vehicle.startClimate",
+      "stage":"updating_profile",
+      "elapsedMs":3200
+    }
+  }
+}
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | integer | Matches the command `id` |
-| `ok` | boolean | Whether command succeeded |
-| `status` | string | Status code (when `ok` is false): `error`, `pending`, `not_supported` |
-| `error` | string | Error message (when `ok` is false) |
+| `ok` | boolean | Whether command succeeded (true for in_progress, false for failed/busy/error) |
+| `status` | string | Status code (see table below) |
+| `stage` | string | (Optional) Current execution stage for `in_progress` and `failed` responses |
+| `error` | string | (Optional) Error message for failed commands |
+| `elapsedMs` | integer | (Optional) Milliseconds since command started |
+| `currentCommand` | object | (Optional) Info about active command when status is `busy` |
 | *...data* | various | Response data flattened into data object |
 
-### Response Status Values
+### Response Status Values (v2.2)
 
-| Status | Description |
-|--------|-------------|
-| *(ok: true)* | Command executed successfully |
-| `error` | Command failed (see `error` field) |
-| `pending` | Command accepted, will complete asynchronously (watch for events) |
-| `not_supported` | Unknown command or domain |
+| Status | ok | Description | Use Case |
+|--------|-----|-------------|----------|
+| *(no status field)* | true | Immediate success (legacy) | Very simple synchronous commands |
+| `in_progress` | true | Command executing, see `stage` field | All tracked commands during execution |
+| `completed` | true | Command finished successfully | Final response for successful async commands |
+| `failed` | false | Command failed, see `error` & `stage` | Any failure (validation or execution) |
+| `busy` | false | Another command in progress | Command rejected due to active command |
+| `error` | false | General error | Generic errors |
+| `not_supported` | false | Unknown command/domain | Unknown action |
+
+### Command Execution Stages
+
+Stages reported in `in_progress` and `failed` responses:
+
+| Stage | Description |
+|-------|-------------|
+| `accepted` | Command accepted, about to start |
+| `requesting_wake` | Requesting vehicle wake |
+| `waiting_for_wake` | Waiting for vehicle to respond |
+| `updating_profile` | Updating charging/climate profile |
+| `sending_command` | Sending BAP frames to vehicle |
+
+**Note:** Not all commands go through all stages. Fast synchronous commands may only show `accepted` → `completed`. Commands for awake vehicles may skip wake stages.
 
 ---
 
