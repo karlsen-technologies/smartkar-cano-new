@@ -4,10 +4,10 @@
 
 SmartKar-Cano is an IoT control unit designed to be installed in a vehicle (VW e-Golf). Its primary functions are:
 
-1. **Remote Command Execution** - Receive commands from a server (start charging, preheat, etc.)
-2. **Telemetry Reporting** - Send device and vehicle status to the server
+1. **Remote Command Execution** - Receive commands from a server (start charging, climate control, etc.)
+2. **Telemetry Reporting** - Send device and vehicle status to the server with priority-based intervals
 3. **Low Power Operation** - Sleep when inactive to preserve 12V battery
-4. **Vehicle Integration** - Interface with CAN bus for vehicle control and monitoring (planned)
+4. **Vehicle Integration** - Interface with CAN bus for vehicle control and monitoring via BAP protocol
 
 ## Hardware Architecture
 
@@ -19,11 +19,13 @@ SmartKar-Cano is an IoT control unit designed to be installed in a vehicle (VW e
 │  │   ESP32-S3  │    │  SIM7080G   │    │   AXP2101   │         │
 │  │             │◄──►│   Modem     │    │     PMU     │         │
 │  │   Main MCU  │    │             │    │             │         │
+│  │   Core 0: CAN RX│ │             │    │             │         │
+│  │   Core 1: Main  │ │             │    │             │         │
 │  └──────┬──────┘    └─────────────┘    └─────────────┘         │
 │         │                                                       │
 └─────────┼───────────────────────────────────────────────────────┘
           │
-          │ (future: T-SIMHAT)
+          │ SPI
           ▼
 ┌─────────────────────┐
 │   VP231 CAN         │
@@ -31,7 +33,9 @@ SmartKar-Cano is an IoT control unit designed to be installed in a vehicle (VW e
 └──────────┬──────────┘
            │
            ▼
-    Vehicle CAN Bus
+    Vehicle CAN Bus (Convenience CAN + Gateway CAN)
+    - Standard 11-bit IDs for vehicle state
+    - Extended 29-bit IDs for BAP protocol
 ```
 
 ## Software Architecture
@@ -76,42 +80,70 @@ The system uses three core interfaces for extensibility:
 ```
 DeviceController (Central Coordinator)
     │
-    ├── CommandRouter
-    │   ├── Handlers: SystemHandler, (future: VehicleHandler, ChargingHandler)
-    │   └── Providers: DeviceProvider, NetworkProvider, (future: VehicleProvider)
+    ├── CommandRouter (Command and telemetry hub)
+    │   │
+    │   ├── Handlers (ICommandHandler implementations)
+    │   │   ├── SystemHandler      → system.* commands (reboot, sleep, info)
+    │   │   ├── VehicleHandler     → vehicle.* commands (climate, charging, state)
+    │   │   └── ChargingProfileHandler → profiles.* commands (timer profiles)
+    │   │
+    │   └── Providers (ITelemetryProvider implementations)
+    │       ├── DeviceProvider     → device telemetry (uptime, battery, memory)
+    │       ├── NetworkProvider    → network telemetry (modem, signal, link)
+    │       └── VehicleProvider    → vehicle telemetry + events (battery, drive, climate)
     │
     ├── Modules (IModule implementations)
-    │   ├── PowerManager    → AXP2101 PMU
-    │   ├── ModemManager    → SIM7080G cellular
-    │   └── LinkManager     → TCP/Server protocol
+    │   ├── PowerManager    → AXP2101 PMU (charging, sleep, wake sources)
+    │   ├── ModemManager    → SIM7080G cellular (LTE Cat-M1/NB-IoT)
+    │   ├── LinkManager     → TCP/Server protocol (JSON messages)
+    │   └── CanManager      → CAN bus interface (Core 0 RX task)
     │
-    └── (future) CANManager → Vehicle CAN bus
+    └── VehicleManager (CAN message routing)
+        ├── Wake State Machine (non-blocking wake sequences)
+        ├── Domain Decoders (CAN → VehicleState)
+        │   ├── BatteryDomain  → 0x191, 0x5CA, etc.
+        │   ├── BodyDomain     → Doors, locks, windows
+        │   ├── ClimateDomain  → Temperature, HVAC
+        │   ├── DriveDomain    → Ignition, speed, odometer
+        │   ├── GpsDomain      → GPS coordinates from CAN
+        │   └── RangeDomain    → Range estimation
+        │
+        └── BAP Protocol (Battery and Parking heater protocol)
+            ├── BapChannelRouter
+            └── BatteryControlChannel → Climate, charging, plug control
 ```
 
 ### Component Dependencies
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│ PowerManager │◄────│ ModemManager │◄────│ LinkManager  │
-└──────────────┘     └──────────────┘     └──────┬───────┘
-                                                  │
-                                                  ▼
-                                          ┌──────────────┐
-                                          │CommandRouter │
-                                          └──────┬───────┘
-                                                 │
-                          ┌──────────────────────┼──────────────────────┐
-                          │                      │                      │
-                          ▼                      ▼                      ▼
-                   ┌─────────────┐      ┌──────────────┐      ┌──────────────┐
-                   │SystemHandler│      │DeviceProvider│      │NetworkProvider│
-                   └─────────────┘      └──────────────┘      └──────────────┘
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│ PowerManager │◄────│ ModemManager │◄────│ LinkManager  │◄────│CommandRouter │
+└──────────────┘     └──────────────┘     └──────┬───────┘     └──────┬───────┘
+                                                  │                    │
+                                                  │                    ▼
+┌──────────────┐                                  │          ┌──────────────────┐
+│ CanManager   │──────────────────────────────────┤          │ Handlers         │
+│ (Core 0 RX)  │                                  │          │ - SystemHandler  │
+└──────┬───────┘                                  │          │ - VehicleHandler │
+       │                                          │          │ - ProfileHandler │
+       ▼                                          │          └──────────────────┘
+┌──────────────┐                                  │
+│VehicleManager│──────────────────────────────────┘          ┌──────────────────┐
+│ - Domains    │                                             │ Providers        │
+│ - BAP Channel│◄────────────────────────────────────────────│ - DeviceProvider │
+│ - Profiles   │                                             │ - NetworkProvider│
+└──────────────┘                                             │ - VehicleProvider│
+                                                             └──────────────────┘
 ```
 
 - **PowerManager** - No dependencies, controls PMU
 - **ModemManager** - Depends on PowerManager for modem power control
 - **LinkManager** - Depends on ModemManager for TCP client, CommandRouter for message handling
-- **Handlers/Providers** - Registered with CommandRouter, may reference DeviceController
+- **CanManager** - Independent, runs CAN RX on Core 0
+- **VehicleManager** - Depends on CanManager for sending frames, contains BAP and domain logic
+- **CommandRouter** - Central hub, connects handlers and providers
+- **Handlers** - Registered with CommandRouter, execute commands, may interact with VehicleManager
+- **Providers** - Registered with CommandRouter, collect and emit telemetry
 
 ## State Machines
 
@@ -260,44 +292,95 @@ The DeviceController tracks `lastActivityTime` and checks:
 8. esp_deep_sleep_start()
 ```
 
-## Future Architecture
+## Vehicle Architecture (Implemented)
 
-### Vehicle Modules (Planned)
+### Vehicle State Tracking
+
+The system maintains a comprehensive `VehicleState` structure with data from multiple sources:
 
 ```
 src/vehicle/
-├── CANManager.h/cpp        # CAN bus interface
-├── ChargingModule.h/cpp    # Charging control & telemetry
-├── ClimateModule.h/cpp     # HVAC control & telemetry
-├── VehicleModule.h/cpp     # Odometer, 12V battery, GPS
-└── SecurityModule.h/cpp    # Locks, horn, lights
+├── VehicleManager.h/cpp       # Main vehicle coordinator, wake state machine
+├── VehicleState.h             # Unified state structure
+├── ChargingProfileManager.h   # Timer profile management (4 profiles)
+├── domains/                   # CAN message decoders
+│   ├── BatteryDomain          # SOC, charging, voltage (CAN 0x191, 0x5CA, etc.)
+│   ├── BodyDomain             # Doors, locks, windows
+│   ├── ClimateDomain          # HVAC temperature
+│   ├── DriveDomain            # Ignition, speed, odometer
+│   ├── GpsDomain              # GPS from CAN
+│   └── RangeDomain            # Range estimation
+└── bap/                       # BAP (Battery and Parking heater) protocol
+    ├── BapProtocol.h          # Protocol definitions
+    ├── BapChannelRouter       # Routes BAP frames to channels
+    └── channels/
+        └── BatteryControlChannel.h  # Climate/charging control + state
 ```
 
-Each vehicle module implements both `ICommandHandler` and `ITelemetryProvider`:
+### Data Source Consolidation
 
-```cpp
-class ChargingModule : public ICommandHandler, public ITelemetryProvider {
-    // Commands: charging.start, charging.stop, charging.setLimit
-    // Telemetry: soc, range, chargingState, chargerPower, etc.
-};
+The `VehicleState` structure consolidates data from multiple sources with automatic prioritization:
+
+| Data Point | CAN Source | BAP Source | Priority |
+|------------|------------|------------|----------|
+| **SOC** | 0x191/0x509 (not available) | Function 0x11 | BAP only |
+| **Charging** | 0x5CA (boolean) | Function 0x11 (detailed) | BAP preferred |
+| **Inside Temp** | 0x66E (passive) | Function 0x12 (active) | BAP when climate active, else CAN |
+| **Plug State** | N/A | Function 0x14 | BAP only |
+
+Each unified field includes:
+- Value (e.g., `battery.soc`)
+- Source tracking (e.g., `battery.socSource = DataSource::BAP`)
+- Timestamp (e.g., `battery.socUpdate = millis()`)
+
+### BAP Protocol
+
+**BAP (Battery and Parking heater)** is VW's proprietary 29-bit CAN protocol for controlling climate and charging.
+
+**Implemented Functions:**
+- **0x11** - Charge state query/response (SOC, mode, status, amps, time remaining)
+- **0x12** - Climate state query/response (active, heating, cooling, temp, time)
+- **0x13** - Charge profile management (4 profiles: 0=immediate, 1-3=timers)
+- **0x14** - Plug state (plugged, supply, lock state)
+- **0x21** - Start charging
+- **0x22** - Stop charging  
+- **0x23** - Start climate
+- **0x24** - Stop climate
+
+**Non-Blocking Command Flow:**
+```
+Command → VehicleHandler → BatteryControlChannel
+                              ↓
+                        Command queued
+                              ↓
+                        loop() state machine:
+                        IDLE → REQUESTING_WAKE → WAITING_FOR_WAKE 
+                        → UPDATING_PROFILE → SENDING_COMMAND → DONE
 ```
 
-### Wake-on-CAN
+All commands use async state machines with progress tracking via `CommandStateManager`.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Wake Source Logic                        │
-│                                                             │
-│  if (wakeSource == MODEM_RI)                                │
-│      → Server wants to send command                          │
-│      → Process command, send response, maybe sleep again     │
-│                                                             │
-│  if (wakeSource == CAN_INTERRUPT)                           │
-│      → Car is waking up                                      │
-│      → Stay awake, start telemetry reporting                 │
-│      → Sleep when CAN bus idle + no server activity          │
-└─────────────────────────────────────────────────────────────┘
-```
+### Vehicle Wake Management (Implemented)
+
+The `VehicleManager` includes a non-blocking wake state machine:
+
+**States:**
+- `ASLEEP` - No CAN activity detected
+- `WAKE_REQUESTED` - Command needs vehicle awake
+- `WAKING` - Wake frames sent, waiting for response
+- `AWAKE` - Vehicle responding to CAN, ready for commands
+
+**Wake Sequence:**
+1. Command requires vehicle awake → `requestWake()`
+2. Send wake frame (0x17330301)
+3. Initialize BAP (0x1B000067)
+4. Start keep-alive (0x5A7 @ 500ms interval)
+5. Wait for CAN activity (vehicle responds)
+6. Transition to `AWAKE` after 2s BAP init delay
+7. Keep-alive continues for 5 minutes or until command activity stops
+
+**Natural Wake Detection:**
+Vehicle can wake itself (door open, key fob) - detected automatically via CAN activity monitoring.
 
 ## Configuration
 

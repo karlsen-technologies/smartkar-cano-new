@@ -1,48 +1,57 @@
-# Connection Manager Module
+# Link Manager Module
 
-> **Note:** This documentation refers to the legacy implementation. The current implementation is in `src/modules/LinkManager.h/cpp` and implements the `IModule` interface. The protocol is now handled via `CommandRouter` with `ICommandHandler` and `ITelemetryProvider` interfaces. See [Architecture](architecture.md) and [Protocol](protocol.md) for current documentation.
+**File:** `src/modules/LinkManager.h`, `src/modules/LinkManager.cpp`
 
-**File:** `src/modules/LinkManager.cpp`, `src/modules/LinkManager.h`
+**Current Implementation** - Updated January 2026
+
+See also: [Architecture](architecture.md) and [Protocol](protocol.md)
 
 ## Purpose
 
-Manages the TCP connection to the remote server. Responsible for:
+Manages the TCP connection to the remote server and implements the `IModule` interface. Responsible for:
 
 - Establishing TCP connection when modem is connected
-- Authentication handshake with server
-- Processing incoming commands
-- Sending responses and state updates
-- Preparing for sleep (notifying server, closing connection)
+- Authentication handshake with server (CCID-based)
+- Receiving and parsing JSON command messages
+- Routing commands to CommandRouter for execution
+- Sending telemetry at priority-based intervals
+- Preparing for sleep (send "bye" message, close connection gracefully)
 
 ## State Machine
 
 ```
 ┌──────────────────┐
-│ LINK_DISCONNECTED│◄─────────────────────────────┐
-└────────┬─────────┘                              │
-         │                                        │
-         │ modem CONNECTED?                       │
-         │ client->connect() success              │
-         ▼                                        │
-┌───────────────────┐                             │
-│LINK_AUTHENTICATING│                             │
-└────────┬──────────┘                             │
-         │                                        │
-         │ send auth request                      │
-         │ wait for response...                   │
-         │                                        │
-    ┌────┴────┐                                   │
-    │         │                                   │
-"accepted" "rejected"                             │
-    │         │                                   │
-    ▼         ▼                                   │
-┌────────────┐ ┌─────────────┐                    │
-│LINK_CONNECTED│ │LINK_REJECTED│                  │
-└─────┬──────┘ └─────────────┘                    │
-      │         (terminal currently)              │
-      │                                           │
-      │ +CA STATE:0,0 (disconnect)                │
-      └───────────────────────────────────────────┘
+│ LINK_DISCONNECTED│◄────────────────────────────────┐
+└────────┬─────────┘                                 │
+         │                                           │
+         │ modem CONNECTED?                          │
+         │ client->connect() success                 │
+         ▼                                           │
+┌───────────────────┐                                │
+│  LINK_CONNECTING  │                                │
+└────────┬──────────┘                                │
+         │                                           │
+         │ TCP connected                             │
+         │ send auth request (CCID)                  │
+         ▼                                           │
+┌───────────────────┐                                │
+│LINK_AUTHENTICATING│                                │
+└────────┬──────────┘                                │
+         │                                           │
+         │ wait for auth response                    │
+         │                                           │
+    ┌────┴────┐                                      │
+    │         │                                      │
+"ok:true"  "ok:false"                                │
+    │         │                                      │
+    ▼         ▼                                      │
+┌────────────┐ ┌─────────────┐                       │
+│LINK_CONNECTED│ │LINK_REJECTED│                     │
+└─────┬──────┘ └─────────────┘                       │
+      │         (retries after timeout)              │
+      │                                              │
+      │ Connection lost / prepareForSleep()          │
+      └──────────────────────────────────────────────┘
 ```
 
 ### State Descriptions
@@ -50,40 +59,60 @@ Manages the TCP connection to the remote server. Responsible for:
 | State | Description | Blocks Sleep? |
 |-------|-------------|---------------|
 | `LINK_DISCONNECTED` | Not connected to server | No |
-| `LINK_AUTHENTICATING` | TCP connected, awaiting auth response | Yes |
-| `LINK_CONNECTED` | Authenticated and ready | No |
-| `LINK_REJECTED` | Server rejected authentication | No |
+| `LINK_CONNECTING` | TCP connecting | Yes |
+| `LINK_AUTHENTICATING` | Waiting for auth response (CCID-based) | Yes |
+| `LINK_CONNECTED` | Authenticated, sending/receiving messages | No |
+| `LINK_REJECTED` | Server rejected authentication (will retry) | No |
 
 ## API
+
+### IModule Interface
+
+```cpp
+bool setup();           // Initialize TCP client
+void loop();            // Attempt connection, handle messages, send telemetry
+bool prepareForSleep(); // Send "bye" message, close TCP
+bool isBusy();          // Returns true during LINK_CONNECTING/LINK_AUTHENTICATING
+bool isReady();         // Returns true when LINK_CONNECTED
+```
 
 ### Public Methods
 
 ```cpp
-bool setup();
+LinkState getState();        // Get current connection state
+bool isConnected();          // Check if authenticated and connected
+void sendMessage(const String& message);  // Send message to server
 ```
-Performs initial setup. If modem is in hot start, closes any existing TCP connection.
+
+### Telemetry Management
+
+LinkManager works with `CommandRouter` to send periodic telemetry:
 
 ```cpp
-void loop();
+void loop() {
+    // ... connection handling ...
+    
+    // Send telemetry at priority-based intervals
+    TelemetryPriority priority = commandRouter->getHighestPriority();
+    unsigned long interval = getTelemetryInterval(priority);
+    
+    if (millis() - lastTelemetrySent >= interval) {
+        String telemetry = commandRouter->collectTelemetry(true);
+        if (telemetry.length() > 0) {
+            sendMessage(telemetry);
+            lastTelemetrySent = millis();
+        }
+    }
+}
 ```
-Main loop tick. Attempts to connect to server when modem is connected and link is disconnected.
 
-```cpp
-bool prepareForSleep();
-```
-Called before entering deep sleep. Sends "asleep" state to server and closes TCP connection.
+**Telemetry Intervals:**
+- `PRIORITY_REALTIME` - 5 seconds
+- `PRIORITY_HIGH` - 30 seconds
+- `PRIORITY_NORMAL` - 2 minutes
+- `PRIORITY_LOW` - 5 minutes
 
-```cpp
-void handleTCPInterrupt();
-```
-Processes TCP events from modem. Called by Modem when `+CA` URC is received.
-
-### Singleton Access
-
-```cpp
-static ConnectionManager* instance();
-```
-Returns singleton instance. Used by Modem for interrupt forwarding.
+Priority is determined by the highest priority among all providers with changed data.
 
 ## Server Protocol
 
@@ -207,16 +236,12 @@ void handleTCPInterrupt() {
 }
 ```
 
+## Message Handling
+
 ### Data Reception Flow
 
 ```
-+CA URC received
-       │
-       ▼
-handleTCPInterrupt()
-       │
-       ▼
-DATAIND: (data available)
+TCP data available (+CA DATAIND URC)
        │
        ▼
 client->readStringUntil('\n')
@@ -225,34 +250,33 @@ client->readStringUntil('\n')
 deserializeJson()
        │
        ▼
-Check "type" field
+Check message "type" field
        │
-       ├── "authentication" → Update link state
+       ├── "auth" (response) → Update link state
        │
-       └── "command" → Execute and respond
+       ├── "command" → Extract id, action, params
+       │                → commandRouter->handleCommand(action, id, params)
+       │                → CommandRouter sends responses automatically
+       │
+       └── Other types → Log and ignore
 ```
 
-## Command Handling
+### Command Routing
 
-### Current Implementation
+Commands are routed through `CommandRouter`, which:
+1. Checks if another command is active (via `CommandStateManager`)
+2. If busy, sends busy response immediately
+3. If not busy, starts command tracking and routes to appropriate handler
+4. Handler executes command (sync or async)
+5. CommandStateManager sends progress updates as command progresses
 
-Only the `test` command is implemented:
+LinkManager's role is limited to:
+- Receiving command JSON
+- Extracting id, action, and params
+- Calling `commandRouter->handleCommand()`
+- The actual response sending is done by CommandStateManager through a callback
 
-```cpp
-if (type == "test") {
-    int id = command["id"];
-    String response = "{\"type\":\"response\",\"data\":{\"id\":" + String(id) + ",\"action\":\"test\",\"status\":\"ok\"}}";
-    client->println(response);
-}
-```
-
-### Future Commands
-
-Planned commands for vehicle control:
-- Start/stop charging
-- Preheat cabin
-- Lock/unlock doors
-- Request telemetry
+See [Protocol](protocol.md) for full command lifecycle documentation.
 
 ## Connection Lifecycle
 
@@ -288,65 +312,37 @@ bool prepareForSleep() {
 
 ## Dependencies
 
-- `Modem` - For modem state and TinyGsmClient
+- `ModemManager` - For modem state and TinyGsmClient instance
+- `CommandRouter` - For command routing and telemetry collection
+- `CommandStateManager` - For command lifecycle tracking (indirect via CommandRouter)
 - `ArduinoJson` - JSON parsing/serialization
-- `TinyGsmClient` - TCP client from TinyGSM
+- `TinyGsmClient` - TCP client from TinyGSM library
 
 ## Configuration
 
+Server connection configured in `LinkManager.cpp`:
 ```cpp
-#define CONNECTION_SERVER_PORT 4589
+#define SERVER_HOST "gallant.kartech.no"
+#define SERVER_PORT 4589
 ```
 
-Server hostname is hardcoded in `loop()`:
-```cpp
-client->connect("gallant.kartech.no", CONNECTION_SERVER_PORT)
-```
-
-## Current Behavior Summary
+## Current Behavior
 
 1. Waits for modem to reach `MODEM_CONNECTED` state
 2. Opens TCP connection to server
-3. Sends authentication with SIM CCID
-4. Waits for server response
-5. Handles commands when connected
-6. Sends "asleep" state before sleep
+3. Sends authentication with SIM CCID: `{"type":"auth","data":{"ccid":"..."}}`
+4. Waits for auth response: `{"type":"auth","data":{"ok":true}}`
+5. On auth success: State → `LINK_CONNECTED`
+   - Starts periodic telemetry sending (priority-based intervals)
+   - Routes incoming commands to CommandRouter
+   - Sends responses via callback from CommandStateManager
+6. On disconnect or sleep:
+   - Sends bye message: `{"type":"bye","data":{"reason":"sleep"}}`
+   - Closes TCP connection gracefully
 
-## Future Considerations
+## Error Recovery
 
-### Error Recovery
-
-- **LINK_REJECTED**: Currently terminal. Should implement retry after timeout.
-- **Auth timeout**: No timeout for auth response. Device could hang in `LINK_AUTHENTICATING`.
-- **Connection failure**: Retries immediately every loop. Could add backoff (not critical for single device).
-
-### Protocol Enhancements
-
-- **Send "awake" state**: Notify server when connection established
-- **Unknown command response**: Send error for unrecognized commands
-- **Periodic status**: Send device/vehicle status periodically
-
-### JSON Handling
-
-Currently mixes String concatenation and ArduinoJson:
-- Deserialization uses ArduinoJson
-- Serialization uses String concatenation
-
-Consider using ArduinoJson for both for consistency and less error-prone code.
-
-### Activity Tracking
-
-Should report activity to coordinator when:
-- Commands received
-- Responses sent
-- Connection state changes
-
-## Known Issues
-
-1. **LINK_REJECTED is terminal** - No recovery path, requires device restart.
-
-2. **No auth timeout** - If server doesn't respond to auth request, device stays in `LINK_AUTHENTICATING` indefinitely.
-
-3. **No unknown command handling** - Unrecognized commands are logged but no error is sent to server.
-
-4. **String-based JSON serialization** - Error-prone compared to using ArduinoJson consistently.
+- **Connection failure**: Retries on next loop iteration (no backoff currently)
+- **Auth rejection** (`ok: false`): Currently logs error and retries after timeout
+- **Disconnect during operation**: Auto-reconnect on next loop
+- **Modem disconnection**: Waits for modem to reconnect before attempting TCP

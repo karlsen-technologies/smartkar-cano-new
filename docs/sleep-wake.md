@@ -2,24 +2,34 @@
 
 ## Overview
 
-The device is designed for low-power operation in a vehicle environment. It must:
+The device is designed for low-power operation in a vehicle environment managed by `DeviceController`. It must:
 
 1. Stay awake while the car is active or server commands are being processed
-2. Sleep when inactive to preserve the 12V battery
-3. Wake on modem events (server communication)
+2. Sleep when inactive to preserve the 12V battery (target: <1mA)
+3. Wake on modem events (server communication via RI pin)
 4. Wake on PMU events (power connected, low battery)
-5. Wake on timer (scheduled tasks)
-6. Wake on CAN bus activity (car becoming active) - *future*
+5. Wake on timer (scheduled tasks, if configured)
+6. Detect vehicle activity via CAN bus (vehicle wakes itself or we wake it)
 
 ## Current Implementation
+
+### Device State Machine
+
+`DeviceController` manages the overall device lifecycle:
+
+**States:**
+- `INITIALIZING` - Setting up modules and providers
+- `RUNNING` - Normal operation, processing commands and telemetry
+- `PREPARING_SLEEP` - Notifying modules, closing connections
+- `SLEEPING` - Entering deep sleep
 
 ### Sleep Decision
 
 Sleep is managed by `DeviceController::canSleep()` which checks:
 
-1. **Minimum awake time** - Device must be awake for at least 10 seconds
+1. **Minimum awake time** - Device must be awake for at least 10 seconds (configurable)
 2. **Activity timeout** - No activity for 5 minutes (configurable)
-3. **Module busy state** - All modules must report not busy
+3. **Module busy state** - All modules must report `!isBusy()`
 4. **Explicit request** - `system.sleep` command bypasses timeout checks
 
 ```cpp
@@ -36,6 +46,8 @@ bool DeviceController::canSleep() {
     if (powerManager->isBusy()) return false;
     if (modemManager->isBusy()) return false;
     if (linkManager->isBusy()) return false;
+    if (canManager->isBusy()) return false;
+    if (vehicleManager->isBusy()) return false;
     
     return true;
 }
@@ -43,33 +55,35 @@ bool DeviceController::canSleep() {
 
 ### Activity Tracking
 
-Modules report activity via callbacks:
+Modules report activity via callbacks registered during initialization:
 
 ```cpp
-// When activity occurs (command received, state change, etc.)
-activityCallback();  // Resets sleep timer
+// In DeviceController::setup()
+powerManager->setActivityCallback(getActivityCallback());
+modemManager->setActivityCallback(getActivityCallback());
+linkManager->setActivityCallback(getActivityCallback());
+vehicleManager->setActivityCallback(getActivityCallback());
 ```
 
 Activity is reported for:
 - Commands received from server
-- Telemetry sent
-- Connection state changes
+- Telemetry sent (resets timer)
+- Connection state changes (modem registered, link connected)
 - Network registration changes
+- Vehicle commands executing
+- CAN activity detected
 
 ### Wake Sources
 
-Currently configured (both set up by PowerManager):
+Currently configured wake sources (all set up by PowerManager):
 
 | Source | GPIO | Method | Description |
 |--------|------|--------|-------------|
-| Modem RI | GPIO 3 | EXT1 | Server sent TCP data |
-| PMU IRQ | GPIO 6 | EXT1 | Low battery, USB power change |
+| Modem RI | GPIO 3 | EXT1 | Server sent TCP data via modem |
+| PMU IRQ | GPIO 6 | EXT1 | Low battery or USB power change |
 | Timer | - | esp_sleep_enable_timer_wakeup | Optional scheduled wake |
 
-Future:
-| Source | GPIO | Method | Description |
-|--------|------|--------|-------------|
-| CAN INT | TBD | EXT1 | Vehicle CAN activity |
+**Note:** CAN interrupt wake is not currently implemented (VP231 INT pin not connected).
 
 ### Wake Cause Detection
 
@@ -108,14 +122,20 @@ DeviceController::loop()
 State → PREPARING_SLEEP
     │
     ├── linkManager->prepareForSleep()
-    │   ├── Send state: "asleep" to server
+    │   ├── Send "bye" message: {"type":"bye","data":{"reason":"sleep"}}
     │   └── Close TCP connection
     │
     ├── modemManager->prepareForSleep()
-    │   └── (Keep modem powered for RI wake)
+    │   └── Keep modem powered for RI wake capability
+    │
+    ├── canManager->prepareForSleep()
+    │   └── No action (CAN transceiver stays powered)
+    │
+    ├── vehicleManager->prepareForSleep()
+    │   └── No action (state persists in RAM across wake)
     │
     └── powerManager->prepareForSleep()
-        └── Configure EXT1 wake on GPIO3 + GPIO6
+        └── Configure EXT1 wake on GPIO3 (modem RI) + GPIO6 (PMU IRQ)
     │
     ▼
 State → SLEEPING
@@ -124,11 +144,11 @@ State → SLEEPING
     └── esp_deep_sleep_start()
     │
     ▼
-[DEEP SLEEP]
+[DEEP SLEEP - RAM powered off, RTC memory preserved]
     │
-    │ Wake event (modem RI, PMU IRQ, timer)
+    │ Wake event (modem RI, PMU IRQ, or timer)
     ▼
-[RESTART - back to INITIALIZING]
+[RESTART - DeviceController::setup() runs again]
 ```
 
 ## Low Power Mode

@@ -1,18 +1,21 @@
-# Modem Module
+# Modem Manager Module
 
-> **Note:** This documentation refers to the legacy implementation. The current implementation is in `src/modules/ModemManager.h/cpp` and implements the `IModule` interface. See [Architecture](architecture.md) for the new module system.
+**File:** `src/modules/ModemManager.h`, `src/modules/ModemManager.cpp`
 
-**File:** `src/modules/ModemManager.cpp`, `src/modules/ModemManager.h`
+**Current Implementation** - Updated January 2026
+
+See also: [Architecture](architecture.md)
 
 ## Purpose
 
-Controls the SIM7080G cellular modem for LTE Cat-M1/NB-IoT connectivity. Responsible for:
+Controls the SIM7080G cellular modem for LTE Cat-M1/NB-IoT connectivity and implements the `IModule` interface. Responsible for:
 
-- Modem power-on sequence
-- Network registration
-- Internet connection (GPRS/LTE)
-- Interrupt handling for modem events
-- Providing TCP client to ConnectionManager
+- Modem power-on sequence and configuration
+- Network registration (LTE Cat-M1 preferred)
+- Internet connection (GPRS/PDP context activation)
+- Interrupt handling for modem events (URCs)
+- Providing TCP client to LinkManager
+- Hot start detection (modem already powered from previous wake)
 
 ## Hardware
 
@@ -37,116 +40,89 @@ The SIM7080G is a multi-band LTE Cat-M and NB-IoT module supporting:
 
 ```
 ┌─────────────┐
-│ MODEM_READY │  Initial state
+│ MODEM_OFF   │  Initial state, modem powered off
 └──────┬──────┘
-       │ setup()
+       │ setup() or enableModem()
+       ├─── Hot start detected? ───► MODEM_STARTING (skip power-on)
+       │
        ▼
-┌──────────────┐     ┌───────────────┐
-│MODEM_DISABLED│◄───►│ MODEM_HOTSTART│
-└──────┬───────┘     └───────┬───────┘
-       │                     │
-       │ enableModem()       │ testAT() + checkState()
-       ▼                     │
-┌───────────────┐            │
-│MODEM_STARTING │◄───────────┘
-└──────┬────────┘
+┌──────────────┐
+│MODEM_STARTING│  Power-on sequence, wait for AT response
+└──────┬───────┘
        │
-       ├─── init() fails ───► MODEM_NOSIM
+       ├─── init() fails (no SIM) ───► MODEM_NOSIM (terminal)
        │
-       │ init() success, checkModemState()
+       │ init() success
        ▼
 ┌────────────────┐
-│MODEM_SEARCHING │◄──────────────────────────┐
-└──────┬─────────┘                           │
-       │                                     │
-       │ CEREG status                        │
-       ├───────────────────────────┐         │
-       │                           │         │
-       ▼                           ▼         │
-┌────────────────┐         ┌─────────────┐   │
-│MODEM_REGISTERED│         │MODEM_DENIED │───┘ (retry 30s)
-└──────┬─────────┘         └─────────────┘
+│MODEM_CONFIGURING│  Set APN, network mode, enable RI
+└──────┬─────────┘
+       │
+       │ Config complete
+       ▼
+┌────────────────┐
+│MODEM_SEARCHING │◄──────────────────────────────────┐
+└──────┬─────────┘                                   │
+       │                                             │
+       │ Check CEREG status                          │
+       ├─────────────────────────────┐               │
+       │                             │               │
+       ▼                             ▼               │
+┌────────────────┐         ┌─────────────────┐       │
+│MODEM_REGISTERED│         │MODEM_UNREGISTERED│──────┘ (retry 1s)
+└──────┬─────────┘         └─────────────────┘
        │                   ┌─────────────────┐
-       │                   │MODEM_UNREGISTERED│──┘ (retry 1s)
+       │                   │  MODEM_DENIED   │──────┘ (retry 30s)
        │                   └─────────────────┘
-       │ GPRS connected
+       │ Activate PDP context (+CNACT)
        ▼
 ┌────────────────┐
-│MODEM_CONNECTED │
+│MODEM_CONNECTED │  Internet connected (+APP ACTIVE)
 └────────────────┘
 ```
 
 ### State Descriptions
 
-| State | Description | Blocks Sleep? |
-|-------|-------------|---------------|
-| `MODEM_READY` | Initial state before setup | N/A |
-| `MODEM_DISABLED` | Modem powered off | No |
-| `MODEM_STARTING` | Powering on and configuring | Yes |
-| `MODEM_HOTSTART` | Checking if modem already running | Yes |
-| `MODEM_TIMEOUT` | Reserved for future timeout handling | - |
-| `MODEM_NOSIM` | No SIM card detected | No |
-| `MODEM_SEARCHING` | Searching for network | No |
-| `MODEM_REGISTERED` | Registered, connecting to internet | Yes |
-| `MODEM_UNREGISTERED` | Lost registration | No |
-| `MODEM_DENIED` | Registration denied | No |
-| `MODEM_CONNECTED` | Connected to internet | No |
+| State | Description | Blocks Sleep? | Timeout |
+|-------|-------------|---------------|---------|
+| `MODEM_OFF` | Modem powered off | No | - |
+| `MODEM_STARTING` | Powering on, waiting for AT | Yes | - |
+| `MODEM_CONFIGURING` | Setting APN, network mode, RI | Yes | - |
+| `MODEM_NOSIM` | No SIM card detected | No | - |
+| `MODEM_SEARCHING` | Searching for network | No | 1s check |
+| `MODEM_REGISTERED` | Registered, activating PDP | Yes | 1s check |
+| `MODEM_UNREGISTERED` | Lost registration | No | 1s retry |
+| `MODEM_DENIED` | Registration denied | No | 30s retry |
+| `MODEM_CONNECTED` | Internet connected | No | 10s check |
 
 ## API
+
+### IModule Interface
+
+```cpp
+bool setup();           // Initialize UART, check for hot start
+void loop();            // State machine tick, connection management
+bool prepareForSleep(); // Keep modem powered for RI wake
+bool isBusy();          // Returns true during state transitions
+bool isReady();         // Returns true when MODEM_CONNECTED
+```
 
 ### Public Methods
 
 ```cpp
-bool setup();
+bool enableModem();      // Power on modem (if currently off)
+bool disableModem();     // Power off modem
+ModemState getState();   // Get current modem state
+String getSimCCID();     // Get SIM card ICCID (cached)
+TinyGsm* getModem();     // Get TinyGsm instance for LinkManager
 ```
-Initializes UART and GPIO pins. Checks if modem is already powered (hot start) or needs to be started fresh.
 
-```cpp
-void loop();
-```
-State machine tick. Handles state transitions and periodic checks based on current state.
+### Activity Callback
 
-```cpp
-bool enableModem();
-```
-Powers on the modem and performs initialization. Only works from `MODEM_DISABLED` or `MODEM_TIMEOUT` states.
-
-```cpp
-bool disableModem();
-```
-Powers off the modem. Works from most active states.
-
-```cpp
-void enableInterrupt();
-```
-Attaches interrupt handler to modem RI pin.
-
-```cpp
-void disableInterrupt();
-```
-Detaches interrupt handler.
-
-```cpp
-void handleModemInterrupt();
-```
-Processes pending modem interrupt. Called from main loop (not ISR).
-
-```cpp
-TinyGsm* getModem();
-```
-Returns TinyGsm instance for direct modem access.
-
-```cpp
-String getSimCCID();
-```
-Returns SIM card CCID (cached after first read).
-
-### Singleton Access
-
-```cpp
-static Modem* instance();
-```
-Returns the singleton instance. Used by interrupt handler and ConnectionManager.
+ModemManager reports activity to DeviceController when:
+- State changes (registered, connected)
+- Network events occur
+- Connection established/lost
 
 ## Interrupt Handling
 

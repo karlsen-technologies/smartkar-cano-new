@@ -2,6 +2,8 @@
 
 **File:** `src/modules/PowerManager.h`, `src/modules/PowerManager.cpp`
 
+**Current Implementation** - Updated January 2026
+
 ## Purpose
 
 Controls the AXP2101 Power Management Unit (PMU) on the LilyGo T-SIM7080G board. Responsible for:
