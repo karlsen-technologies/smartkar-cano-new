@@ -271,8 +271,8 @@ If too many places to update at once:
 
 ### Remove/Update VehicleState
 
-- [ ] If fully migrated: Delete `src/vehicle/VehicleState.h`
-- [ ] If keeping compatibility: Mark as deprecated
+- [x] Delete `src/vehicle/VehicleState.h` (completed 2026-01-31)
+- [x] Replaced with `VehicleTypes.h` for shared types only
 
 ### Clean VehicleManager
 

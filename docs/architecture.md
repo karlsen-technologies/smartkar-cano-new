@@ -301,25 +301,25 @@ The system maintains a comprehensive `VehicleState` structure with data from mul
 ```
 src/vehicle/
 ├── VehicleManager.h/cpp       # Main vehicle coordinator, wake state machine
-├── VehicleState.h             # Unified state structure
+├── VehicleTypes.h             # Shared types (DataSource, LockState, etc.)
 ├── ChargingProfileManager.h   # Timer profile management (4 profiles)
-├── domains/                   # CAN message decoders
-│   ├── BatteryDomain          # SOC, charging, voltage (CAN 0x191, 0x5CA, etc.)
-│   ├── BodyDomain             # Doors, locks, windows
-│   ├── ClimateDomain          # HVAC temperature
-│   ├── DriveDomain            # Ignition, speed, odometer
-│   ├── GpsDomain              # GPS from CAN
-│   └── RangeDomain            # Range estimation
+├── domains/                   # Domain managers (each owns RTC-persisted state)
+│   ├── BatteryManager         # SOC, charging, voltage (CAN + BAP)
+│   ├── BodyManager            # Doors, locks, windows
+│   ├── ClimateManager         # HVAC temperature (CAN + BAP)
+│   ├── DriveManager           # Ignition, speed, odometer
+│   ├── GpsManager             # GPS from CAN
+│   └── RangeManager           # Range estimation
 └── bap/                       # BAP (Battery and Parking heater) protocol
     ├── BapProtocol.h          # Protocol definitions
     ├── BapChannelRouter       # Routes BAP frames to channels
     └── channels/
-        └── BatteryControlChannel.h  # Climate/charging control + state
+        └── BatteryControlChannel.h  # Climate/charging control + callbacks
 ```
 
 ### Data Source Consolidation
 
-The `VehicleState` structure consolidates data from multiple sources with automatic prioritization:
+Each domain manager maintains its own state with automatic prioritization:
 
 | Data Point | CAN Source | BAP Source | Priority |
 |------------|------------|------------|----------|
@@ -328,10 +328,11 @@ The `VehicleState` structure consolidates data from multiple sources with automa
 | **Inside Temp** | 0x66E (passive) | Function 0x12 (active) | BAP when climate active, else CAN |
 | **Plug State** | N/A | Function 0x14 | BAP only |
 
-Each unified field includes:
-- Value (e.g., `battery.soc`)
-- Source tracking (e.g., `battery.socSource = DataSource::BAP`)
-- Timestamp (e.g., `battery.socUpdate = millis()`)
+Each domain manager state includes:
+- Value (e.g., `BatteryManager::State.soc`)
+- Source tracking (e.g., `BatteryManager::State.socSource = DataSource::BAP`)
+- Timestamp (e.g., `BatteryManager::State.socUpdate = millis()`)
+- RTC persistence (state survives deep sleep)
 
 ### BAP Protocol
 
