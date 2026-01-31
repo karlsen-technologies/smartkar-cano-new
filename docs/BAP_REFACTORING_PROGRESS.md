@@ -141,7 +141,7 @@ bool needsProfileUpdate(float tempCelsius, bool allowBattery);
 
 ### ✅ Phase 3: Switch VehicleHandler to Domains (COMPLETE)
 **Status:** Complete - 2026-01-31  
-**Commit:** (pending)  
+**Commit:** `882b643` - feat(bap): Phase 3 - Switch VehicleHandler to use domain managers  
 **Duration:** ~30 minutes  
 **Build Status:** ✅ SUCCESS (445KB flash, 20KB RAM)
 
@@ -365,9 +365,9 @@ VehicleHandler → BatteryManager / ClimateManager
   - Application layer now uses domain path exclusively
   - Old BatteryControlChannel command methods remain but are unused
 - **Commits:**
-  - (pending commit)
+  - `882b643` - Phase 3 complete
 - **Build Status:** ✅ SUCCESS (445KB flash, +1KB from Phase 2)
-- **Lines Changed:** ~4 method calls
+- **Lines Changed:** 4 method calls updated
 - **Next:** Phase 4 - Cleanup BatteryControlChannel
 
 ---
