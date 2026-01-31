@@ -182,7 +182,7 @@ BatteryControlChannel (protocol only)
 
 ### ✅ Phase 4: Cleanup BatteryControlChannel (COMPLETE)
 **Status:** Complete - 2026-01-31  
-**Commit:** (pending)  
+**Commit:** `9fa0205` - feat(bap): Phase 4 - Remove all command logic from BatteryControlChannel (FINAL PHASE)  
 **Duration:** ~1 hour  
 **Build Status:** ✅ SUCCESS (440KB flash, 20KB RAM)
 
@@ -417,7 +417,7 @@ VehicleHandler → BatteryManager / ClimateManager
   - Fixed BatteryManager and ClimateManager isBusy() to check domain state
   - Removed command statistics tracking
 - **Commits:**
-  - (pending commit)
+  - `9fa0205` - Phase 4 complete (FINAL)
 - **Build Status:** ✅ SUCCESS (440KB flash, -5KB from Phase 3)
 - **Lines Removed:** ~640 lines from BatteryControlChannel
 - **Result:** BatteryControlChannel is now a **pure protocol layer**
