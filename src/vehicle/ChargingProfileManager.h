@@ -204,6 +204,47 @@ public:
      */
     void loop();
     
+    // =========================================================================
+    // Profile Execution API (NEW - Phase 1)
+    // =========================================================================
+    
+    /**
+     * Execute profile 0 immediately.
+     * Sends function 0x18 OPERATION_MODE with "execute now" command.
+     * Tracks async response (HeartbeatStatus → Status).
+     * 
+     * Caller MUST ensure:
+     * - Vehicle is awake (or wake is in progress)
+     * - Profile 0 is configured correctly (or update is queued)
+     * 
+     * @param callback Called when car responds (success/failure)
+     * @return true if queued, false if already executing
+     */
+    bool executeProfile0(std::function<void(bool, const char*)> callback);
+    
+    /**
+     * Stop profile 0 execution.
+     * Sends function 0x18 OPERATION_MODE with "stop" command.
+     * 
+     * @param callback Called when car responds
+     * @return true if queued, false if already busy
+     */
+    bool stopProfile0(std::function<void(bool, const char*)> callback);
+    
+    /**
+     * Check if profile execution is in progress
+     */
+    bool isExecutionInProgress() const { return execState != ExecutionState::IDLE; }
+    
+    /**
+     * Process OPERATION_MODE response (function 0x18).
+     * Called by BatteryControlChannel when receiving:
+     * - HeartbeatStatus (0x03) - car is working
+     * - Status (0x04) - operation complete
+     * - Error (0x07) - operation failed
+     */
+    void processOperationModeResponse(const BapProtocol::BapMessage& msg);
+    
 private:
     VehicleManager* manager;
     
@@ -259,6 +300,51 @@ private:
      * Call callback and reset state to IDLE
      */
     void completeUpdate(bool success);
+    
+    // =========================================================================
+    // Profile Execution State Machine (NEW - Phase 1)
+    // =========================================================================
+    
+    enum class ExecutionState {
+        IDLE,                   // No execution in progress
+        SENDING_EXECUTE,        // Sent execute command
+        WAITING_RESPONSE,       // Waiting for STATUS response
+        SENDING_STOP,           // Sent stop command
+        DONE,                   // Execution complete
+        FAILED                  // Execution failed
+    };
+    
+    ExecutionState execState = ExecutionState::IDLE;
+    unsigned long execStateStartTime = 0;
+    std::function<void(bool, const char*)> execCallback = nullptr;
+    uint8_t heartbeatCount = 0;
+    
+    static constexpr unsigned long EXECUTION_TIMEOUT = 30000;  // 30s
+    
+    /**
+     * Update execution state machine tick (called from loop())
+     */
+    void updateExecutionStateMachine();
+    
+    /**
+     * Set execution state with logging
+     */
+    void setExecutionState(ExecutionState newState);
+    
+    /**
+     * Send execute command (function 0x18 with execute opcode)
+     */
+    bool sendExecuteCommand();
+    
+    /**
+     * Send stop command (function 0x18 with stop opcode)
+     */
+    bool sendStopCommand();
+    
+    /**
+     * Complete execution and call callback
+     */
+    void completeExecution(bool success, const char* error);
     
     // =========================================================================
     // Internal Methods

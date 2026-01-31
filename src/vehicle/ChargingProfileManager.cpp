@@ -296,7 +296,8 @@ bool ChargingProfileManager::parseCompactProfile(uint8_t profileIndex,
 // =============================================================================
 
 void ChargingProfileManager::loop() {
-    updateStateMachine();
+    updateStateMachine();           // Profile update state machine (existing)
+    updateExecutionStateMachine();  // Profile execution state machine (NEW - Phase 1)
 }
 
 const char* ChargingProfileManager::getUpdateStateName() const {
@@ -564,3 +565,176 @@ bool ChargingProfileManager::sendProfileUpdateRequest(uint8_t profileIndex) {
     Serial.printf("[ProfileMgr] Sent %d frames for profile %d update\r\n", frameCount, profileIndex);
     return true;
 }
+
+// =============================================================================
+// Profile Execution API (NEW - Phase 1)
+// =============================================================================
+
+bool ChargingProfileManager::executeProfile0(std::function<void(bool, const char*)> callback) {
+    // Reject if already busy
+    if (execState != ExecutionState::IDLE) {
+        Serial.println("[ProfileMgr] Execute rejected: already in progress");
+        return false;
+    }
+    
+    // Store callback
+    execCallback = callback;
+    heartbeatCount = 0;
+    
+    Serial.println("[ProfileMgr] Starting profile 0 execution");
+    setExecutionState(ExecutionState::SENDING_EXECUTE);
+    
+    return true;
+}
+
+bool ChargingProfileManager::stopProfile0(std::function<void(bool, const char*)> callback) {
+    // Reject if already busy (unless we're currently executing and want to stop)
+    if (execState != ExecutionState::IDLE && execState != ExecutionState::WAITING_RESPONSE) {
+        Serial.println("[ProfileMgr] Stop rejected: invalid state");
+        return false;
+    }
+    
+    // Store callback
+    execCallback = callback;
+    heartbeatCount = 0;
+    
+    Serial.println("[ProfileMgr] Stopping profile 0 execution");
+    setExecutionState(ExecutionState::SENDING_STOP);
+    
+    return true;
+}
+
+void ChargingProfileManager::processOperationModeResponse(const BapProtocol::BapMessage& msg) {
+    // Only process if we're waiting for a response
+    if (execState != ExecutionState::WAITING_RESPONSE) {
+        return;  // Not expecting response
+    }
+    
+    switch (msg.opcode) {
+        case OpCode::HEARTBEAT:
+            heartbeatCount++;
+            Serial.printf("[ProfileMgr] Execution heartbeat %d\n", heartbeatCount);
+            // Just tracking, don't notify domain - car is still working
+            break;
+            
+        case OpCode::STATUS:
+            // Success!
+            Serial.println("[ProfileMgr] Execution complete (STATUS received)");
+            completeExecution(true, nullptr);
+            break;
+            
+        case OpCode::ERROR:
+            // Failure
+            Serial.println("[ProfileMgr] Execution failed (ERROR received)");
+            completeExecution(false, "car_rejected");
+            break;
+            
+        default:
+            Serial.printf("[ProfileMgr] Unexpected opcode in execution response: 0x%02X\n", msg.opcode);
+            break;
+    }
+}
+
+void ChargingProfileManager::updateExecutionStateMachine() {
+    unsigned long now = millis();
+    unsigned long elapsed = now - execStateStartTime;
+    
+    switch (execState) {
+        case ExecutionState::IDLE:
+            // Nothing to do
+            break;
+            
+        case ExecutionState::SENDING_EXECUTE:
+            if (sendExecuteCommand()) {
+                Serial.println("[ProfileMgr] Execute command sent");
+                setExecutionState(ExecutionState::WAITING_RESPONSE);
+            } else {
+                Serial.println("[ProfileMgr] Execute command send failed");
+                completeExecution(false, "send_failed");
+            }
+            break;
+            
+        case ExecutionState::SENDING_STOP:
+            if (sendStopCommand()) {
+                Serial.println("[ProfileMgr] Stop command sent");
+                setExecutionState(ExecutionState::WAITING_RESPONSE);
+            } else {
+                Serial.println("[ProfileMgr] Stop command send failed");
+                completeExecution(false, "send_failed");
+            }
+            break;
+            
+        case ExecutionState::WAITING_RESPONSE:
+            // Check for timeout
+            if (elapsed > EXECUTION_TIMEOUT) {
+                Serial.printf("[ProfileMgr] Execution timeout after %lums\n", elapsed);
+                completeExecution(false, "timeout");
+            }
+            // Response handled by processOperationModeResponse()
+            break;
+            
+        case ExecutionState::DONE:
+        case ExecutionState::FAILED:
+            // Reset to IDLE on next loop
+            setExecutionState(ExecutionState::IDLE);
+            break;
+    }
+}
+
+void ChargingProfileManager::setExecutionState(ExecutionState newState) {
+    if (newState != execState) {
+        execState = newState;
+        execStateStartTime = millis();
+    }
+}
+
+bool ChargingProfileManager::sendExecuteCommand() {
+    // Build OPERATION_MODE command to execute profile 0
+    // Payload: [operation_mode, timer_bits]
+    // operation_mode: ProfileOperation value (e.g., CHARGING, CLIMATE, CHARGING_AND_CLIMATE)
+    // timer_bits: 0x00 = execute profile 0 immediately
+    
+    const Profile& p = profiles[0];
+    if (!p.valid) {
+        Serial.println("[ProfileMgr] WARNING: Profile 0 not valid, executing anyway");
+    }
+    
+    uint8_t frame[8];
+    uint8_t payload[2] = { p.operation, 0x00 };  // Execute profile 0 (timer_bits = 0)
+    
+    encodeShortMessage(frame, OpCode::SET_GET, DEVICE_BATTERY_CONTROL,
+                      Function::OPERATION_MODE, payload, 2);
+    
+    Serial.printf("[ProfileMgr] Sending EXECUTE command: operation=0x%02X\n", p.operation);
+    
+    return manager->sendCanFrame(CAN_ID_BATTERY_TX, frame, 8, true);
+}
+
+bool ChargingProfileManager::sendStopCommand() {
+    // Build OPERATION_MODE command to stop profile 0
+    // Payload: [0x00, 0x00] = stop all operations
+    
+    uint8_t frame[8];
+    uint8_t payload[2] = { 0x00, 0x00 };  // Stop operation
+    
+    encodeShortMessage(frame, OpCode::SET_GET, DEVICE_BATTERY_CONTROL,
+                      Function::OPERATION_MODE, payload, 2);
+    
+    Serial.println("[ProfileMgr] Sending STOP command");
+    
+    return manager->sendCanFrame(CAN_ID_BATTERY_TX, frame, 8, true);
+}
+
+void ChargingProfileManager::completeExecution(bool success, const char* error) {
+    if (execCallback) {
+        execCallback(success, error);
+        execCallback = nullptr;
+    }
+    
+    if (success) {
+        setExecutionState(ExecutionState::DONE);
+    } else {
+        setExecutionState(ExecutionState::FAILED);
+    }
+}
+

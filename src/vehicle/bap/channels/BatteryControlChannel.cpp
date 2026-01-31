@@ -85,6 +85,24 @@ bool BatteryControlChannel::processMessage(const BapProtocol::BapMessage& msg) {
                 return false;
             }
             
+        case Function::OPERATION_MODE:
+            // NEW (Phase 1): Forward OPERATION_MODE responses to ChargingProfileManager
+            // Handles HeartbeatStatus (0x03), Status (0x04), and Error (0x07) responses
+            // for profile execution tracking
+            if (msg.opcode == OpCode::HEARTBEAT || 
+                msg.opcode == OpCode::STATUS || 
+                msg.opcode == OpCode::ERROR) {
+                if (manager) {
+                    manager->profiles().processOperationModeResponse(msg);
+                }
+                otherFrames++;
+                return true;
+            } else {
+                // Ignore request opcodes
+                otherFrames++;
+                return false;
+            }
+            
         default:
             // Silently count unhandled functions - no logging from CAN task
             otherFrames++;
