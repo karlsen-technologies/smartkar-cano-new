@@ -69,9 +69,6 @@ void VehicleManager::loop()
 {
     // Update wake state machine using services
     wakeController.loop(activityTracker.isActive());
-
-    // Update channel command state machines
-    batteryControlChannel.loop();
     
     // Update profile manager state machine
     profileManager.loop();
@@ -340,13 +337,6 @@ void VehicleManager::logStatistics()
                       rangeState.totalRangeKm, rangeState.electricRangeKm,
                       rangeState.displayRangeKm, rangeState.tendencyStr());
     }
-
-    // BAP command statistics
-    uint32_t cmdQueued, cmdCompleted, cmdFailed;
-    batteryControlChannel.getCommandStats(cmdQueued, cmdCompleted, cmdFailed);
-    Serial.printf("[VehicleManager] BAP Commands: queued=%lu completed=%lu failed=%lu (success rate: %.1f%%)\r\n",
-                  cmdQueued, cmdCompleted, cmdFailed,
-                  cmdQueued > 0 ? (cmdCompleted * 100.0f / cmdQueued) : 100.0f);
 
     // BAP Plug status (from BatteryManager)
     const BatteryManager::State& battState = batteryManager.getState();

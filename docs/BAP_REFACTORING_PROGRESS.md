@@ -1,8 +1,8 @@
 # BAP Architecture Refactoring - Progress Tracker
 
 **Started:** 2026-01-31  
-**Current Phase:** Phase 2 ✅ COMPLETE  
-**Next Phase:** Phase 3 (Switch VehicleHandler to Domains)
+**Current Phase:** Phase 4 ✅ COMPLETE  
+**Status:** **ALL PHASES COMPLETE** - Refactoring finished!
 
 ---
 
@@ -180,21 +180,54 @@ BatteryControlChannel (protocol only)
 
 ---
 
-### ⏳ Phase 4: Cleanup BatteryControlChannel
-**Status:** Not started  
-**Estimated Duration:** 2-3 hours  
-**Prerequisites:** Phase 3 complete
+### ✅ Phase 4: Cleanup BatteryControlChannel (COMPLETE)
+**Status:** Complete - 2026-01-31  
+**Commit:** (pending)  
+**Duration:** ~1 hour  
+**Build Status:** ✅ SUCCESS (440KB flash, 20KB RAM)
 
-**Plan:**
-1. Remove all command methods from BatteryControlChannel
-2. Remove CommandState enum and state machine
-3. Remove pending command storage
-4. Remove profile decision logic
-5. Remove wake coordination
-6. Remove event emission
-7. Add simple `sendBapMessage()` API
+**What Was Done:**
+1. ✅ Removed command methods (startClimate, stopClimate, startCharging, stopCharging, startChargingAndClimate)
+2. ✅ Removed CommandState enum and state machine
+3. ✅ Removed PendingCommand enum and pending command storage
+4. ✅ Removed updateCommandStateMachine() and executePendingCommand() methods
+5. ✅ Removed needsProfileUpdate() and requestProfileUpdateForPendingCommand() methods
+6. ✅ Removed setCommandState(), getPendingCommandName(), emitCommandEvent() methods
+7. ✅ Removed loop() and isBusy() methods
+8. ✅ Removed command statistics (commandsQueued, commandsCompleted, commandsFailed)
+9. ✅ Removed unused profile builders (buildProfileConfig, buildChargingAndClimateStart, etc.)
+10. ✅ Fixed VehicleManager to remove batteryControlChannel.loop() call
+11. ✅ Fixed BatteryManager and ClimateManager isBusy() to use domain state
+12. ✅ Build verified - pure protocol layer achieved
 
-**Result:** Pure protocol layer (encode/decode/callbacks only)
+**Key Changes:**
+- BatteryControlChannel.h: Removed ~90 lines (command API and state machine)
+- BatteryControlChannel.cpp: Removed ~550 lines (command implementation)
+- VehicleManager.cpp: Removed loop() and statistics calls
+- BatteryManager.cpp: Fixed isBusy() to check domain state
+- ClimateManager.cpp: Fixed isBusy() to check domain state
+
+**BatteryControlChannel NOW ONLY:**
+```cpp
+// Pure Protocol Layer
+- Frame encoding/decoding (BAP message assembly)
+- Multi-frame assembly (BapFrameAssembler)
+- Message routing (by function ID)
+- Callback registration and dispatch
+- State request methods (requestPlugState, requestChargeState, requestClimateState)
+```
+
+**BatteryControlChannel NO LONGER HAS:**
+- ❌ Command methods
+- ❌ Command state machine
+- ❌ Business logic (profile decisions, wake coordination)
+- ❌ Event emission
+- ❌ Command statistics
+
+**Testing:**
+- ✅ Compiles successfully
+- ✅ Flash size reduced by ~5KB (445KB → 440KB)
+- ⏳ Real vehicle testing pending
 
 ---
 
@@ -205,11 +238,11 @@ BatteryControlChannel (protocol only)
 | **Phase 1** | ✅ COMPLETE | 3h | Low |
 | **Phase 2** | ✅ COMPLETE | 2h | Medium |
 | **Phase 3** | ✅ COMPLETE | 30min | Low |
-| **Phase 4** | ⏳ Pending | 2-3h | Low |
-| **TOTAL** | **75%** | **8-9h** | **Medium** |
+| **Phase 4** | ✅ COMPLETE | 1h | Low |
+| **TOTAL** | **100%** | **6.5h** | **Low** |
 
-**Current Completion:** 75% (Phase 1-3 of 4)  
-**Remaining Effort:** ~2-3 hours
+**Current Completion:** 100% (All 4 phases complete!)  
+**Total Effort:** 6.5 hours (under original 11-14h estimate)
 
 ---
 
@@ -285,9 +318,9 @@ All Phase 1-2 changes compile and build successfully.
 ## Next Steps
 
 ### Immediate (Next Session)
-1. **Start Phase 4** - Remove command methods from BatteryControlChannel (cleanup)
-2. **Test Phase 3** - Deploy to vehicle, verify commands work through new domain path
-3. **Final verification** - Ensure protocol layer is pure (no business logic)
+1. **Test on real vehicle** - Deploy to vehicle, verify commands work end-to-end
+2. **Monitor for issues** - Watch for any edge cases or bugs
+3. **Performance testing** - Verify response times and stability
 
 ### Testing Strategy (After Phase 3)
 1. Test new path: `vehicleHandler → domain → profileManager → batteryControlChannel`
@@ -370,6 +403,25 @@ VehicleHandler → BatteryManager / ClimateManager
 - **Lines Changed:** 4 method calls updated
 - **Next:** Phase 4 - Cleanup BatteryControlChannel
 
+### Session 4: 2026-01-31 (Evening - continued)
+- **Duration:** ~1 hour
+- **Work Completed:** Phase 4 implementation (FINAL PHASE)
+- **Changes:**
+  - Removed all command methods from BatteryControlChannel (5 methods)
+  - Removed CommandState enum and all state machine code
+  - Removed PendingCommand enum and pending command storage
+  - Removed all business logic methods (needsProfileUpdate, requestProfileUpdateForPendingCommand, etc.)
+  - Removed loop(), isBusy(), getCommandStats() methods
+  - Removed unused profile builders (7 methods)
+  - Fixed VehicleManager to remove batteryControlChannel.loop() call
+  - Fixed BatteryManager and ClimateManager isBusy() to check domain state
+  - Removed command statistics tracking
+- **Commits:**
+  - (pending commit)
+- **Build Status:** ✅ SUCCESS (440KB flash, -5KB from Phase 3)
+- **Lines Removed:** ~640 lines from BatteryControlChannel
+- **Result:** BatteryControlChannel is now a **pure protocol layer**
+
 ---
 
-**For next session: Start Phase 4 (remove command logic from BatteryControlChannel).**
+**Refactoring complete! All 4 phases finished in 6.5 hours.**

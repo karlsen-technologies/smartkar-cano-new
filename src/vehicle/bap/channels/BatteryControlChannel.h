@@ -223,90 +223,12 @@ public:
     bool processFrame(uint32_t canId, const uint8_t* data, uint8_t dlc);
     
     // =========================================================================
-    // Command State Machine
-    // =========================================================================
-    
-    enum class CommandState {
-        IDLE,              // No pending commands
-        UPDATING_PROFILE,  // Waiting for profile update to complete
-        REQUESTING_WAKE,   // Requested vehicle wake
-        WAITING_FOR_WAKE,  // Polling for vehicle awake
-        SENDING_COMMAND,   // Sending BAP frames
-        DONE,              // Command sent successfully
-        FAILED             // Command failed (wake timeout, send error)
-    };
-    
-    /**
-     * Process command state machine (called from VehicleManager::loop())
-     */
-    void loop();
-    
-    /**
-     * Check if command is in progress
-     */
-    bool isBusy() const { return commandState != CommandState::IDLE; }
-    
-    /**
-     * Get current command state
-     */
-    CommandState getCommandState() const { return commandState; }
-    
-    /**
-     * Get command state as string (for logging)
-     */
-    const char* getCommandStateName() const;
-    
-    // =========================================================================
-    // Command methods (non-blocking - set flags, processed in loop())
+    // State Request Methods
     // =========================================================================
     
     bool requestPlugState();
     bool requestChargeState();
     bool requestClimateState();
-    
-    /**
-     * Start climate control (non-blocking).
-     * Sets flag, processed in loop() when vehicle awake.
-     * @param commandId Command ID from server for progress tracking
-     * @param tempCelsius Target temperature in Celsius
-     * @param allowBattery Allow climate to use battery power
-     * @return true if queued, false if busy with another command
-     */
-    bool startClimate(int commandId, float tempCelsius = 21.0f, bool allowBattery = false);
-    
-    /**
-     * Stop climate control (non-blocking).
-     * @param commandId Command ID from server for progress tracking
-     * @return true if queued, false if busy
-     */
-    bool stopClimate(int commandId);
-    
-    /**
-     * Start charging (non-blocking).
-     * @param commandId Command ID from server for progress tracking
-     * @param targetSoc Target state of charge percentage (0-100)
-     * @param maxCurrent Maximum charging current in amps
-     * @return true if queued, false if busy
-     */
-    bool startCharging(int commandId, uint8_t targetSoc = 80, uint8_t maxCurrent = 32);
-    
-    /**
-     * Stop charging (non-blocking).
-     * @param commandId Command ID from server for progress tracking
-     * @return true if queued, false if busy
-     */
-    bool stopCharging(int commandId);
-    
-    /**
-     * Start combined charging and climate (non-blocking).
-     * @param tempCelsius Target temperature in Celsius
-     * @param targetSoc Target state of charge percentage (0-100)
-     * @param maxCurrent Maximum charging current in amps
-     * @param allowBattery Allow climate to use battery power
-     * @return true if queued, false if busy
-     */
-    bool startChargingAndClimate(float tempCelsius = 21.0f, uint8_t targetSoc = 80, 
-                                  uint8_t maxCurrent = 32, bool allowBattery = false);
     
     // =========================================================================
     // Statistics
@@ -320,12 +242,6 @@ public:
         profileCount = profileFrames;
     }
     
-    void getCommandStats(uint32_t& queued, uint32_t& completed, uint32_t& failed) const {
-        queued = commandsQueued;
-        completed = commandsCompleted;
-        failed = commandsFailed;
-    }
-    
 private:
     VehicleManager* manager;
     
@@ -337,33 +253,6 @@ private:
     std::vector<ChargeStateCallback> chargeStateCallbacks;
     std::vector<ClimateStateCallback> climateStateCallbacks;
     
-    // Command state machine
-    CommandState commandState = CommandState::IDLE;
-    unsigned long commandStateStartTime = 0;
-    int currentCommandId = -1;  // Command ID for progress tracking
-    
-    // Pending command data (only ONE can be active at a time)
-    enum class PendingCommand {
-        NONE,
-        START_CLIMATE,
-        STOP_CLIMATE,
-        START_CHARGING,
-        STOP_CHARGING,
-        START_CHARGING_AND_CLIMATE
-    };
-    
-    PendingCommand pendingCommand = PendingCommand::NONE;
-    
-    // Command parameters
-    float pendingTempCelsius = 21.0f;
-    bool pendingAllowBattery = false;
-    uint8_t pendingTargetSoc = 80;
-    uint8_t pendingMaxCurrent = 32;
-    
-    // Command timing
-    static constexpr unsigned long COMMAND_PROFILE_UPDATE_TIMEOUT = 5000;  // 5s max for profile update
-    static constexpr unsigned long COMMAND_WAKE_TIMEOUT = 15000;  // 15s max wait for wake
-    
     // Statistics
     volatile uint32_t plugFrames = 0;
     volatile uint32_t chargeFrames = 0;
@@ -373,50 +262,9 @@ private:
     volatile uint32_t ignoredRequests = 0;
     volatile uint32_t decodeErrors = 0;
     
-    uint32_t commandsQueued = 0;
-    uint32_t commandsCompleted = 0;
-    uint32_t commandsFailed = 0;
-    
     // =========================================================================
     // Internal methods
     // =========================================================================
-    
-    /**
-     * Update command state machine (called from loop())
-     */
-    void updateCommandStateMachine();
-    
-    /**
-     * Execute the pending command (send BAP frames)
-     */
-    bool executePendingCommand();
-    
-    /**
-     * Check if pending command needs profile update
-     */
-    bool needsProfileUpdate() const;
-    
-    /**
-     * Request profile update for the pending command
-     */
-    bool requestProfileUpdateForPendingCommand();
-    
-    /**
-     * Set command state with logging
-     */
-    void setCommandState(CommandState newState);
-    
-    /**
-     * Get pending command name as string (for events)
-     */
-    const char* getPendingCommandName() const;
-    
-    /**
-     * Emit command event via CommandRouter singleton
-     * @param eventName Event name (e.g., "commandCompleted", "commandFailed")
-     * @param reason Failure reason (nullptr for success)
-     */
-    void emitCommandEvent(const char* eventName, const char* reason);
     
     /**
      * Notify all registered callbacks (for new domain-based architecture).
@@ -435,14 +283,6 @@ private:
     ClimateStateData decodeClimateState(const uint8_t* payload, uint8_t len);
     
     uint8_t buildGetRequest(uint8_t* dest, uint8_t functionId);
-    uint8_t buildClimateStart(uint8_t* dest, float tempCelsius);
-    uint8_t buildClimateStop(uint8_t* dest);
-    uint8_t buildChargeStart(uint8_t* dest);
-    uint8_t buildChargeStop(uint8_t* dest);
-    uint8_t buildChargingAndClimateStart(uint8_t* dest);
-    uint8_t buildOperationModeStart(uint8_t* dest);
-    uint8_t buildOperationModeStop(uint8_t* dest);
-    uint8_t buildProfileConfig(uint8_t* startFrame, uint8_t* contFrame, uint8_t operationMode);
     
     bool sendBapFrame(const uint8_t* data, uint8_t len);
 };

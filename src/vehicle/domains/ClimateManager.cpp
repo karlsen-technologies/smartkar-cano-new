@@ -88,8 +88,8 @@ void ClimateManager::onWakeComplete() {
 }
 
 bool ClimateManager::isBusy() const {
-    // Delegate to BAP channel
-    return bapChannel ? bapChannel->isBusy() : false;
+    // Check if domain command state machine is busy
+    return cmdState != CommandState::IDLE;
 }
 
 // =============================================================================

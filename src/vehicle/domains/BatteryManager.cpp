@@ -96,8 +96,8 @@ void BatteryManager::onWakeComplete() {
 }
 
 bool BatteryManager::isBusy() const {
-    // Delegate to BAP channel
-    return bapChannel ? bapChannel->isBusy() : false;
+    // Check if domain command state machine is busy
+    return cmdState != CommandState::IDLE;
 }
 
 // =============================================================================
