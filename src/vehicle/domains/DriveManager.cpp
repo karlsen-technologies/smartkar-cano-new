@@ -1,8 +1,20 @@
 #include "DriveManager.h"
 #include "../VehicleManager.h"
 
+// =============================================================================
+// RTC Memory Storage - Survives Deep Sleep
+// =============================================================================
+
+// Store drive state in RTC memory so it persists across deep sleep
+RTC_DATA_ATTR DriveManager::State rtcDriveState = {};
+
+// =============================================================================
+// Constructor
+// =============================================================================
+
 DriveManager::DriveManager(VehicleManager* mgr)
-    : vehicleManager(mgr) {
+    : vehicleManager(mgr)
+    , state(rtcDriveState) {  // Initialize reference to RTC memory
 }
 
 bool DriveManager::setup() {

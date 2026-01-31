@@ -164,8 +164,8 @@ private:
     VehicleManager* vehicleManager;
     BatteryControlChannel* bapChannel;  // Reference to BAP channel (set in setup)
     
-    // Domain state (owned by this manager)
-    State state;
+    // Domain state (reference to RTC memory - survives deep sleep)
+    State& state;
     
     // CAN IDs this domain handles
     static constexpr uint32_t CAN_ID_KLIMA_03 = 0x66E;         // Inside temp, climate status

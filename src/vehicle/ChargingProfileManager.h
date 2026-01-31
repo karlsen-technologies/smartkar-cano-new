@@ -207,8 +207,8 @@ public:
 private:
     VehicleManager* manager;
     
-    // Profile storage
-    ChargingProfile::Profile profiles[ChargingProfile::PROFILE_COUNT];
+    // Profile storage (reference to RTC memory - survives deep sleep)
+    ChargingProfile::Profile (&profiles)[ChargingProfile::PROFILE_COUNT];
     
     // Statistics
     volatile uint32_t profileUpdateCount = 0;

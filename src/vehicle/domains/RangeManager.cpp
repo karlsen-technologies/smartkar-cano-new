@@ -1,8 +1,20 @@
 #include "RangeManager.h"
 #include "../VehicleManager.h"
 
+// =============================================================================
+// RTC Memory Storage - Survives Deep Sleep
+// =============================================================================
+
+// Store range state in RTC memory so it persists across deep sleep
+RTC_DATA_ATTR RangeManager::State rtcRangeState = {};
+
+// =============================================================================
+// Constructor
+// =============================================================================
+
 RangeManager::RangeManager(VehicleManager* mgr)
-    : vehicleManager(mgr) {
+    : vehicleManager(mgr)
+    , state(rtcRangeState) {  // Initialize reference to RTC memory
 }
 
 bool RangeManager::setup() {

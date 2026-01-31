@@ -1,8 +1,20 @@
 #include "GpsManager.h"
 #include "../VehicleManager.h"
 
+// =============================================================================
+// RTC Memory Storage - Survives Deep Sleep
+// =============================================================================
+
+// Store GPS state in RTC memory so it persists across deep sleep
+RTC_DATA_ATTR GpsManager::State rtcGpsState = {};
+
+// =============================================================================
+// Constructor
+// =============================================================================
+
 GpsManager::GpsManager(VehicleManager* mgr)
-    : vehicleManager(mgr) {
+    : vehicleManager(mgr)
+    , state(rtcGpsState) {  // Initialize reference to RTC memory
 }
 
 bool GpsManager::setup() {

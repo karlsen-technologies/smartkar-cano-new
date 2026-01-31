@@ -1,8 +1,20 @@
 #include "BodyManager.h"
 #include "../VehicleManager.h"
 
+// =============================================================================
+// RTC Memory Storage - Survives Deep Sleep
+// =============================================================================
+
+// Store body state in RTC memory so it persists across deep sleep
+RTC_DATA_ATTR BodyManager::State rtcBodyState = {};
+
+// =============================================================================
+// Constructor
+// =============================================================================
+
 BodyManager::BodyManager(VehicleManager* mgr)
-    : vehicleManager(mgr) {
+    : vehicleManager(mgr)
+    , state(rtcBodyState) {  // Initialize reference to RTC memory
 }
 
 bool BodyManager::setup() {

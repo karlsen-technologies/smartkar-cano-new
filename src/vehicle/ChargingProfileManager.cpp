@@ -5,6 +5,13 @@ using namespace ChargingProfile;
 using namespace BapProtocol;
 
 // =============================================================================
+// RTC Memory Storage - Survives Deep Sleep
+// =============================================================================
+
+// Store profiles in RTC memory so they persist across deep sleep
+RTC_DATA_ATTR Profile rtcProfiles[PROFILE_COUNT] = {};
+
+// =============================================================================
 // BAP Constants (TODO: Move to BatteryControlChannel)
 // =============================================================================
 
@@ -23,12 +30,12 @@ namespace {
 // =============================================================================
 
 ChargingProfileManager::ChargingProfileManager(VehicleManager* mgr)
-    : manager(mgr)
+    : manager(mgr),
+      profiles(rtcProfiles)  // Reference to RTC memory
 {
-    // Initialize all profiles to cleared state
-    for (uint8_t i = 0; i < PROFILE_COUNT; i++) {
-        profiles[i].clear();
-    }
+    // Note: RTC memory persists across deep sleep, so profiles survive
+    // On first boot (cold start), RTC memory is zero-initialized
+    // No need to clear profiles here - they're already persistent
 }
 
 // =============================================================================

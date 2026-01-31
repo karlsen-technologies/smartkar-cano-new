@@ -90,7 +90,9 @@ public:
 
 private:
     VehicleManager* vehicleManager;
-    State state;
+    
+    // Domain state (reference to RTC memory - survives deep sleep)
+    State& state;
     
     static constexpr uint32_t CAN_ID_REICHWEITE_01 = 0x5F5;
     static constexpr uint32_t CAN_ID_REICHWEITE_02 = 0x5F7;

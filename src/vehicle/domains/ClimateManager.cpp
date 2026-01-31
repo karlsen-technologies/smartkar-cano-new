@@ -2,9 +2,21 @@
 #include "../VehicleManager.h"
 #include "../bap/channels/BatteryControlChannel.h"
 
+// =============================================================================
+// RTC Memory Storage - Survives Deep Sleep
+// =============================================================================
+
+// Store climate state in RTC memory so it persists across deep sleep
+RTC_DATA_ATTR ClimateManager::State rtcClimateState = {};
+
+// =============================================================================
+// Constructor
+// =============================================================================
+
 ClimateManager::ClimateManager(VehicleManager* mgr)
     : vehicleManager(mgr)
-    , bapChannel(nullptr) {
+    , bapChannel(nullptr)
+    , state(rtcClimateState) {  // Initialize reference to RTC memory
 }
 
 bool ClimateManager::setup() {

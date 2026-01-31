@@ -140,8 +140,8 @@ public:
 private:
     VehicleManager* vehicleManager;
     
-    // Domain state (owned by this manager)
-    State state;
+    // Domain state (reference to RTC memory - survives deep sleep)
+    State& state;
     
     // CAN IDs this domain handles
     static constexpr uint32_t CAN_ID_IGNITION = 0x3C0;    // Klemmen_Status_01

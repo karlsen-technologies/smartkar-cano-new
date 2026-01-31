@@ -104,7 +104,9 @@ public:
 
 private:
     VehicleManager* vehicleManager;
-    State state;
+    
+    // Domain state (reference to RTC memory - survives deep sleep)
+    State& state;
     
     static constexpr uint32_t CAN_ID_NAV_POS_01 = 0x486;
     static constexpr uint32_t CAN_ID_NAV_DATA_02 = 0x485;
