@@ -78,8 +78,8 @@ CommandResult VehicleHandler::handleStartClimate(CommandContext& ctx) {
     Serial.printf("[VEHICLE] Starting climate control at %.1f°C (battery=%s)\r\n", 
                   tempCelsius, allowBattery ? "yes" : "no");
     
-    // Queue command via BatteryControlChannel (non-blocking) - pass command ID
-    bool accepted = vehicleManager->batteryControl().startClimate(ctx.id, tempCelsius, allowBattery);
+    // Queue command via ClimateManager (non-blocking) - pass command ID
+    bool accepted = vehicleManager->climate()->startClimate(ctx.id, tempCelsius, allowBattery);
     
     if (accepted) {
         // Command accepted and will execute in background
@@ -93,8 +93,8 @@ CommandResult VehicleHandler::handleStartClimate(CommandContext& ctx) {
 CommandResult VehicleHandler::handleStopClimate(CommandContext& ctx) {
     Serial.println("[VEHICLE] Stopping climate control");
     
-    // Queue stop command via BatteryControlChannel (non-blocking) - pass command ID
-    bool accepted = vehicleManager->batteryControl().stopClimate(ctx.id);
+    // Queue stop command via ClimateManager (non-blocking) - pass command ID
+    bool accepted = vehicleManager->climate()->stopClimate(ctx.id);
     
     if (accepted) {
         // Command accepted and will execute in background
@@ -132,8 +132,8 @@ CommandResult VehicleHandler::handleStartCharging(CommandContext& ctx) {
     
     Serial.printf("[VEHICLE] Charging params: targetSoc=%d%%, maxCurrent=%dA\r\n", targetSoc, maxCurrent);
     
-    // Queue command via BatteryControlChannel (non-blocking) - pass command ID
-    bool accepted = vehicleManager->batteryControl().startCharging(ctx.id, targetSoc, maxCurrent);
+    // Queue command via BatteryManager (non-blocking) - pass command ID
+    bool accepted = vehicleManager->battery()->startCharging(ctx.id, targetSoc, maxCurrent);
     
     if (accepted) {
         // Command accepted and will execute in background
@@ -147,8 +147,8 @@ CommandResult VehicleHandler::handleStartCharging(CommandContext& ctx) {
 CommandResult VehicleHandler::handleStopCharging(CommandContext& ctx) {
     Serial.println("[VEHICLE] Stopping charging");
     
-    // Queue stop command via BatteryControlChannel (non-blocking) - pass command ID
-    bool accepted = vehicleManager->batteryControl().stopCharging(ctx.id);
+    // Queue stop command via BatteryManager (non-blocking) - pass command ID
+    bool accepted = vehicleManager->battery()->stopCharging(ctx.id);
     
     if (accepted) {
         // Command accepted and will execute in background
