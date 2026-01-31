@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 #include "../IDomain.h"
-#include "../VehicleState.h"
+#include "../VehicleTypes.h"
 #include "../protocols/BroadcastDecoder.h"
 
 // Forward declarations

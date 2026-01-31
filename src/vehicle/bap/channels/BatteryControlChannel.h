@@ -1,10 +1,10 @@
 #pragma once
 
 #include <Arduino.h>
-#include <functional>
 #include <vector>
+#include <functional>
 #include "../BapChannel.h"
-#include "../../VehicleState.h"
+#include "../../VehicleTypes.h"
 #include "../../protocols/BapProtocol.h"
 
 // Forward declaration

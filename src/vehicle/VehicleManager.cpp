@@ -34,9 +34,6 @@ VehicleManager::~VehicleManager()
 bool VehicleManager::setup()
 {
     Serial.println("[VehicleManager] Initializing vehicle domains...");
-
-    // Initialize state
-    state = VehicleState();
     
     // Initialize services
     Serial.println("[VehicleManager] Initializing services...");
@@ -88,48 +85,17 @@ void VehicleManager::loop()
 }
 
 // =============================================================================
-// State access (thread-safe via mutex)
+// State Access
 // =============================================================================
-
-VehicleState VehicleManager::getStateCopy()
-{
-    // Acquire mutex with 100ms timeout
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE)
-    {
-        VehicleState copy = state;
-        xSemaphoreGive(stateMutex);
-        return copy;
-    }
-
-    // Timeout - return potentially stale data
-    Serial.println("[VehicleManager] WARNING: getStateCopy() mutex timeout, returning stale data");
-    return state;
-}
 
 bool VehicleManager::isVehicleAwake()
 {
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE)
-    {
-        bool awake = state.isAwake();
-        xSemaphoreGive(stateMutex);
-        return awake;
-    }
-
-    // Timeout - return potentially stale data
-    return state.isAwake();
+    return activityTracker.isActive(5000);  // Consider awake if activity within 5s
 }
 
 uint32_t VehicleManager::getFrameCount()
 {
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE)
-    {
-        uint32_t count = state.canFrameCount;
-        xSemaphoreGive(stateMutex);
-        return count;
-    }
-
-    // Timeout - return potentially stale data
-    return state.canFrameCount;
+    return activityTracker.getFrameCount();
 }
 
 // =============================================================================
@@ -147,9 +113,7 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc
         return;
     }
 
-    // Count every frame, but only mark activity after initialization
-    // Mark CAN activity in both state and tracker
-    state.markCanActivity();
+    // Count every frame and mark activity
     activityTracker.onCanActivity();
 
     // Extended frames: only BAP
@@ -270,8 +234,8 @@ bool VehicleManager::sendCanFrame(uint32_t canId, const uint8_t *data, uint8_t d
 
 void VehicleManager::logStatistics()
 {
-    // Get a consistent snapshot of state
-    VehicleState snapshot = getStateCopy();
+    // Get frame counts from ActivityTracker
+    uint32_t totalFrameCount = activityTracker.getFrameCount();
 
     // Get CanManager's count for comparison
     uint32_t canMgrCount = canManager ? canManager->getMessageCount() : 0;
@@ -282,17 +246,17 @@ void VehicleManager::logStatistics()
     // Frame loss analysis
     uint32_t processedByDomains = bodyFrames + batteryFrames + driveFrames + climateFrames + gpsFrames + rangeFrames + bapFrames + unhandledFrames;
     Serial.printf("[VehicleManager] CanManager received: %lu (TWAI missed: %lu)\r\n", canMgrCount, canMgrMissed);
-    Serial.printf("[VehicleManager] VehicleManager processed: %lu (domains: %lu)\r\n", snapshot.canFrameCount, processedByDomains);
-    if (canMgrCount > snapshot.canFrameCount)
+    Serial.printf("[VehicleManager] ActivityTracker: %lu frames | Domains processed: %lu\r\n", totalFrameCount, processedByDomains);
+    if (canMgrCount > totalFrameCount)
     {
         Serial.printf("[VehicleManager] FRAME LOSS: %lu frames lost between CanManager and VehicleManager (mutex timeout?)\r\n",
-                      canMgrCount - snapshot.canFrameCount);
+                      canMgrCount - totalFrameCount);
     }
 
     Serial.printf("[VehicleManager] Domain breakdown: body:%lu batt:%lu drv:%lu clim:%lu gps:%lu rng:%lu bap:%lu unhandled:%lu\r\n",
                   bodyFrames, batteryFrames, driveFrames, climateFrames, gpsFrames, rangeFrames, bapFrames, unhandledFrames);
 
-    Serial.printf("[VehicleManager] Vehicle awake: %s\r\n", snapshot.isAwake() ? "YES" : "NO");
+    Serial.printf("[VehicleManager] Vehicle awake: %s\r\n", activityTracker.isActive() ? "YES" : "NO");
 
     // BodyManager stats
     {

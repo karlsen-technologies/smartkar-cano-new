@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include "VehicleState.h"
+#include "VehicleTypes.h"
 #include "bap/channels/BatteryControlChannel.h"
 #include "ChargingProfileManager.h"
 #include "../core/IModule.h"  // For ActivityCallback
@@ -97,14 +97,8 @@ public:
     bool sendCanFrame(uint32_t canId, const uint8_t* data, uint8_t dlc, bool extended = false);
     
     // =========================================================================
-    // State access (thread-safe)
+    // State access (thread-safe via ActivityTracker)
     // =========================================================================
-    
-    /**
-     * Get a copy of the vehicle state (thread-safe).
-     * Use this when you need multiple fields consistently.
-     */
-    VehicleState getStateCopy();
     
     /**
      * Check if vehicle CAN bus is active (thread-safe).
@@ -209,12 +203,10 @@ public:
 private:
     CanManager* canManager;
     
-    // Vehicle state (written by CAN task on Core 0, read by main loop on Core 1)
-    // Protected by mutex for thread-safe access across cores
-    VehicleState state;
-    SemaphoreHandle_t stateMutex = nullptr;  // FreeRTOS mutex for thread-safe state access
+    // Mutex for thread-safe access (CAN task Core 0 + main loop Core 1)
+    SemaphoreHandle_t stateMutex = nullptr;
     
-    // Domain managers (NEW ARCHITECTURE - Phase 2-4 complete)
+    // Domain managers (NEW ARCHITECTURE)
     BatteryManager batteryManager;
     ClimateManager climateManager;
     BodyManager bodyManager;
