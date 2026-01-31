@@ -125,6 +125,11 @@ public:
     ChargingProfileManager& profiles() { return profileManager; }
     
     /**
+     * Get the wake controller (for domains to coordinate wake).
+     */
+    WakeController& wake() { return wakeController; }
+    
+    /**
      * Get the new BatteryManager (domain-based architecture).
      * NOTE: Running in parallel with old BatteryDomain for testing.
      */

@@ -1,6 +1,8 @@
 #include "ClimateManager.h"
 #include "../VehicleManager.h"
 #include "../bap/channels/BatteryControlChannel.h"
+#include "../ChargingProfileManager.h"
+#include "../services/WakeController.h"
 
 // =============================================================================
 // RTC Memory Storage - Survives Deep Sleep
@@ -16,6 +18,8 @@ RTC_DATA_ATTR ClimateManager::State rtcClimateState = {};
 ClimateManager::ClimateManager(VehicleManager* mgr)
     : vehicleManager(mgr)
     , bapChannel(nullptr)
+    , profileManager(nullptr)
+    , wakeController(nullptr)
     , state(rtcClimateState) {  // Initialize reference to RTC memory
 }
 
@@ -27,8 +31,10 @@ bool ClimateManager::setup() {
         return false;
     }
     
-    // Get reference to BatteryControlChannel (SHARED with BatteryManager)
+    // Get references to services
     bapChannel = &vehicleManager->batteryControl();
+    profileManager = &vehicleManager->profiles();
+    wakeController = &vehicleManager->wake();
     
     // Register callback for BAP updates
     Serial.println("[ClimateManager] Registering BAP callback (SHARED channel)...");
@@ -48,8 +54,8 @@ bool ClimateManager::setup() {
 }
 
 void ClimateManager::loop() {
-    // No periodic tasks needed for now
-    // All processing happens in CAN frame callbacks and BAP callbacks
+    // Update command state machine
+    updateCommandStateMachine();
 }
 
 void ClimateManager::processCanFrame(uint32_t canId, const uint8_t* data, uint8_t dlc) {
@@ -153,7 +159,7 @@ void ClimateManager::onClimateStateUpdate(const ClimateState& climate) {
 }
 
 // =============================================================================
-// Command Interface
+// Command Interface (NEW - Phase 2: Domain State Machine)
 // =============================================================================
 
 bool ClimateManager::requestState() {
@@ -168,24 +174,246 @@ bool ClimateManager::requestState() {
 }
 
 bool ClimateManager::startClimate(int commandId, float tempCelsius, bool allowBattery) {
-    if (!bapChannel) {
-        Serial.println("[ClimateManager] ERROR: No BAP channel!");
+    // Check if already busy
+    if (cmdState != CommandState::IDLE) {
+        Serial.println("[ClimateManager] Command already in progress");
         return false;
     }
     
-    Serial.printf("[ClimateManager] Starting climate: temp=%.1f°C, allowBattery=%s\r\n", 
-                  tempCelsius, allowBattery ? "YES" : "no");
+    // Validate parameters (business logic)
+    if (!validateClimateParams(tempCelsius)) {
+        return false;
+    }
     
-    return bapChannel->startClimate(commandId, tempCelsius, allowBattery);
+    Serial.printf("[ClimateManager] Start climate command: id=%d, temp=%.1f°C, allowBattery=%s\r\n", 
+                  commandId, tempCelsius, allowBattery ? "YES" : "no");
+    
+    // Store pending command
+    pendingCmdType = PendingCommandType::START_CLIMATE;
+    pendingCommandId = commandId;
+    pendingTempCelsius = tempCelsius;
+    pendingAllowBattery = allowBattery;
+    
+    // Start state machine
+    if (!wakeController->isAwake()) {
+        Serial.println("[ClimateManager] Vehicle not awake, requesting wake");
+        setCommandState(CommandState::REQUESTING_WAKE);
+        wakeController->requestWake();
+    } else if (needsProfileUpdate(tempCelsius, allowBattery)) {
+        Serial.println("[ClimateManager] Profile needs update");
+        setCommandState(CommandState::UPDATING_PROFILE);
+    } else {
+        Serial.println("[ClimateManager] Profile OK, executing now");
+        setCommandState(CommandState::EXECUTING_COMMAND);
+    }
+    
+    return true;
 }
 
 bool ClimateManager::stopClimate(int commandId) {
-    if (!bapChannel) {
-        Serial.println("[ClimateManager] ERROR: No BAP channel!");
+    // Check if already busy
+    if (cmdState != CommandState::IDLE) {
+        Serial.println("[ClimateManager] Command already in progress");
         return false;
     }
     
-    Serial.println("[ClimateManager] Stopping climate");
+    Serial.printf("[ClimateManager] Stop climate command: id=%d\r\n", commandId);
     
-    return bapChannel->stopClimate(commandId);
+    // Store pending command
+    pendingCmdType = PendingCommandType::STOP_CLIMATE;
+    pendingCommandId = commandId;
+    
+    // Stop doesn't need profile update, just execute
+    if (!wakeController->isAwake()) {
+        Serial.println("[ClimateManager] Vehicle not awake, requesting wake");
+        setCommandState(CommandState::REQUESTING_WAKE);
+        wakeController->requestWake();
+    } else {
+        Serial.println("[ClimateManager] Stopping profile 0");
+        setCommandState(CommandState::EXECUTING_COMMAND);
+    }
+    
+    return true;
+}
+
+// =============================================================================
+// Command State Machine Implementation
+// =============================================================================
+
+void ClimateManager::updateCommandStateMachine() {
+    if (cmdState == CommandState::IDLE || cmdState == CommandState::DONE || cmdState == CommandState::FAILED) {
+        return;  // Nothing to do
+    }
+    
+    unsigned long elapsed = millis() - cmdStateStartTime;
+    
+    switch (cmdState) {
+        case CommandState::REQUESTING_WAKE:
+            // Check if wake completed
+            if (wakeController->isAwake()) {
+                Serial.println("[ClimateManager] Wake complete");
+                
+                // Decide next state based on command type
+                if (pendingCmdType == PendingCommandType::START_CLIMATE && 
+                    needsProfileUpdate(pendingTempCelsius, pendingAllowBattery)) {
+                    setCommandState(CommandState::UPDATING_PROFILE);
+                } else {
+                    setCommandState(CommandState::EXECUTING_COMMAND);
+                }
+            } else if (elapsed > WAKE_TIMEOUT) {
+                failCommand("wake_timeout");
+            }
+            break;
+            
+        case CommandState::UPDATING_PROFILE: {
+            // Build profile update
+            ChargingProfileManager::ProfileFieldUpdate update;
+            update.updateTemperature = true;
+            update.temperature = pendingTempCelsius;
+            update.updateOperation = true;
+            update.operation = pendingAllowBattery 
+                ? ChargingProfile::OperationMode::CLIMATE_ALLOW_BATTERY
+                : ChargingProfile::OperationMode::CLIMATE_ONLY;
+            
+            // Request profile update (async)
+            bool ok = profileManager->requestProfileUpdate(0, update, [this](bool success) {
+                if (success) {
+                    Serial.println("[ClimateManager] Profile update success");
+                    setCommandState(CommandState::EXECUTING_COMMAND);
+                } else {
+                    failCommand("profile_update_failed");
+                }
+            });
+            
+            if (!ok) {
+                failCommand("profile_update_busy");
+                break;
+            }
+            
+            // Move to next state immediately (callback will advance)
+            setCommandState(CommandState::DONE);  // Will be overridden by callback
+            break;
+        }
+            
+        case CommandState::EXECUTING_COMMAND: {
+            bool ok = false;
+            
+            if (pendingCmdType == PendingCommandType::START_CLIMATE) {
+                // Execute profile 0
+                ok = profileManager->executeProfile0([this](bool success, const char* error) {
+                    if (success) {
+                        Serial.println("[ClimateManager] Climate started successfully");
+                        completeCommand();
+                    } else {
+                        Serial.printf("[ClimateManager] Climate failed: %s\r\n", error ? error : "unknown");
+                        failCommand(error ? error : "execution_failed");
+                    }
+                });
+            } else if (pendingCmdType == PendingCommandType::STOP_CLIMATE) {
+                // Stop profile 0
+                ok = profileManager->stopProfile0([this](bool success, const char* error) {
+                    if (success) {
+                        Serial.println("[ClimateManager] Climate stopped successfully");
+                        completeCommand();
+                    } else {
+                        Serial.printf("[ClimateManager] Stop failed: %s\r\n", error ? error : "unknown");
+                        failCommand(error ? error : "stop_failed");
+                    }
+                });
+            }
+            
+            if (!ok) {
+                failCommand("execution_busy");
+                break;
+            }
+            
+            // Move to waiting state (callback will complete)
+            setCommandState(CommandState::DONE);  // Will be overridden by callback
+            break;
+        }
+            
+        default:
+            break;
+    }
+}
+
+void ClimateManager::setCommandState(CommandState newState) {
+    if (cmdState == newState) {
+        return;
+    }
+    
+    const char* stateName[] = {"IDLE", "REQUESTING_WAKE", "UPDATING_PROFILE", "EXECUTING_COMMAND", "DONE", "FAILED"};
+    Serial.printf("[ClimateManager] Command state: %s -> %s\r\n", 
+                  stateName[(int)cmdState], stateName[(int)newState]);
+    
+    cmdState = newState;
+    cmdStateStartTime = millis();
+}
+
+bool ClimateManager::validateClimateParams(float tempCelsius) {
+    // Business logic: Validate temperature range (VW e-Golf range)
+    if (tempCelsius < 15.5f || tempCelsius > 30.0f) {
+        Serial.printf("[ClimateManager] Invalid temperature: %.1f°C (must be 15.5-30.0°C)\r\n", tempCelsius);
+        return false;
+    }
+    
+    return true;
+}
+
+bool ClimateManager::needsProfileUpdate(float tempCelsius, bool allowBattery) {
+    // Check if profile 0 exists
+    if (!profileManager->isProfileValid(0)) {
+        Serial.println("[ClimateManager] Profile 0 not valid, needs read first");
+        return true;  // Need to read profile first
+    }
+    
+    const auto& profile0 = profileManager->getProfile(0);
+    
+    // Business logic: Check temperature with 0.5°C tolerance
+    float currentTemp = profile0.getTemperature();
+    if (abs(currentTemp - tempCelsius) > 0.5f) {
+        Serial.printf("[ClimateManager] Temperature changed: %.1f°C -> %.1f°C\r\n", 
+                      currentTemp, tempCelsius);
+        return true;
+    }
+    
+    // Business logic: Check operation mode
+    uint8_t desiredOp = allowBattery 
+        ? ChargingProfile::OperationMode::CLIMATE_ALLOW_BATTERY
+        : ChargingProfile::OperationMode::CLIMATE_ONLY;
+    
+    if (profile0.operation != desiredOp) {
+        Serial.printf("[ClimateManager] Operation mode changed: %d -> %d\r\n", 
+                      profile0.operation, desiredOp);
+        return true;
+    }
+    
+    Serial.println("[ClimateManager] Profile 0 already has correct settings");
+    return false;
+}
+
+void ClimateManager::completeCommand() {
+    Serial.printf("[ClimateManager] Command %d completed successfully\r\n", pendingCommandId);
+    
+    // Reset state
+    setCommandState(CommandState::IDLE);
+    pendingCmdType = PendingCommandType::NONE;
+    pendingCommandId = -1;
+    
+    // TODO: Emit event or call callback when we add event system
+}
+
+void ClimateManager::failCommand(const char* reason) {
+    Serial.printf("[ClimateManager] Command %d failed: %s\r\n", pendingCommandId, reason);
+    
+    // Reset state
+    setCommandState(CommandState::FAILED);
+    
+    // Give it a moment to log, then reset
+    delay(10);
+    setCommandState(CommandState::IDLE);
+    pendingCmdType = PendingCommandType::NONE;
+    pendingCommandId = -1;
+    
+    // TODO: Emit event or call callback when we add event system
 }

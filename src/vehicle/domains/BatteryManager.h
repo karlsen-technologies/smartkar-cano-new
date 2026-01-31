@@ -8,6 +8,8 @@
 // Forward declarations
 class VehicleManager;
 class BatteryControlChannel;
+class ChargingProfileManager;
+class WakeController;
 
 /**
  * BatteryManager - Unified battery domain manager
@@ -150,20 +152,31 @@ public:
     float getTemperature() const { return state.temperature; }
     
     // =========================================================================
-    // Command Interface (delegates to BatteryControlChannel)
+    // Command Interface (NEW - Phase 2: Uses domain state machine)
     // =========================================================================
     
     /**
-     * Start charging (non-blocking).
+     * Start charging with domain orchestration (non-blocking).
+     * Uses profile manager and wake controller for intelligent command execution.
+     * 
+     * Workflow:
+     * 1. Validate charging parameters (business logic)
+     * 2. Request wake if needed
+     * 3. Update profile 0 if needed (SOC/current changed)
+     * 4. Execute profile 0
+     * 5. Monitor response and call callback
+     * 
      * @param commandId Command ID for tracking
      * @param targetSoc Target state of charge (0-100)
      * @param maxCurrent Maximum charging current in amps
-     * @return true if command queued, false if busy
+     * @return true if command queued, false if already busy
      */
     bool startCharging(uint8_t commandId, uint8_t targetSoc = 80, uint8_t maxCurrent = 32);
     
     /**
      * Stop charging (non-blocking).
+     * Stops profile 0 execution immediately.
+     * 
      * @param commandId Command ID for tracking
      * @return true if command queued, false if busy
      */
@@ -187,9 +200,59 @@ public:
 private:
     VehicleManager* vehicleManager;
     BatteryControlChannel* bapChannel;  // Reference to BAP channel (set in setup)
+    ChargingProfileManager* profileManager;  // Reference to profile manager (set in setup)
+    WakeController* wakeController;  // Reference to wake controller (set in setup)
     
     // Domain state (reference to RTC memory - survives deep sleep)
     State& state;
+    
+    // =========================================================================
+    // Command State Machine (NEW - Phase 2)
+    // =========================================================================
+    
+    /**
+     * Command state machine states
+     */
+    enum class CommandState {
+        IDLE,                   // No command in progress
+        REQUESTING_WAKE,        // Waiting for vehicle wake
+        UPDATING_PROFILE,       // Profile update in progress
+        EXECUTING_COMMAND,      // Profile execution in progress
+        DONE,                   // Command complete
+        FAILED                  // Command failed
+    };
+    
+    /**
+     * Pending command type
+     */
+    enum class PendingCommandType {
+        NONE,
+        START_CHARGING,
+        STOP_CHARGING
+    };
+    
+    // Command state machine state
+    CommandState cmdState = CommandState::IDLE;
+    unsigned long cmdStateStartTime = 0;  // When current state was entered
+    
+    // Pending command data
+    PendingCommandType pendingCmdType = PendingCommandType::NONE;
+    int pendingCommandId = -1;
+    uint8_t pendingTargetSoc = 80;
+    uint8_t pendingMaxCurrent = 32;
+    
+    // Command state machine methods
+    void updateCommandStateMachine();
+    void setCommandState(CommandState newState);
+    bool validateChargingParams(uint8_t targetSoc, uint8_t maxCurrent);
+    bool needsProfileUpdate(uint8_t targetSoc, uint8_t maxCurrent);
+    void completeCommand();
+    void failCommand(const char* reason);
+    
+    // Timeout constants
+    static constexpr unsigned long WAKE_TIMEOUT = 10000;      // 10 seconds
+    static constexpr unsigned long PROFILE_UPDATE_TIMEOUT = 30000;  // 30 seconds
+    static constexpr unsigned long EXECUTION_TIMEOUT = 30000;  // 30 seconds
     
     // CAN IDs this domain handles
     static constexpr uint32_t CAN_ID_BMS_07 = 0x5CA;           // Charging status, energy
