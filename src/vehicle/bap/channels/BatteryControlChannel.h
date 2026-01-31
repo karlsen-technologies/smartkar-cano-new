@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Arduino.h>
+#include <functional>
+#include <vector>
 #include "../BapChannel.h"
 #include "../../VehicleState.h"
 #include "../../protocols/BapProtocol.h"
@@ -156,7 +158,7 @@ public:
     // Construction
     // =========================================================================
     
-    BatteryControlChannel(VehicleState& state, VehicleManager* mgr);
+    BatteryControlChannel(VehicleManager* mgr);
     
     // =========================================================================
     // BapChannel interface implementation
@@ -170,12 +172,55 @@ public:
     bool processMessage(const BapProtocol::BapMessage& msg) override;
     
     // =========================================================================
-    // State accessors
+    // Callback Registration (for new domain-based architecture)
     // =========================================================================
     
-    const PlugState& getPlugState() const { return state.plug; }
-    const BatteryState& getBatteryState() const { return state.battery; }
-    const ClimateState& getClimateState() const { return state.climate; }
+    /**
+     * Callback types for domain subscribers.
+     * Domains register these callbacks to be notified when state updates occur.
+     * Callbacks are called from CAN thread (Core 0) - keep them FAST!
+     */
+    using PlugStateCallback = std::function<void(const PlugState&)>;
+    using ChargeStateCallback = std::function<void(const BatteryState&)>;  // Pass full battery state for charge info
+    using ClimateStateCallback = std::function<void(const ClimateState&)>;
+    
+    /**
+     * Register callback for plug state updates (function 0x10).
+     * Called whenever plug state changes (plug/unplug, lock/unlock, supply changes).
+     * @param callback Function to call with new plug state
+     */
+    void onPlugState(PlugStateCallback callback) {
+        plugStateCallbacks.push_back(callback);
+    }
+    
+    /**
+     * Register callback for charge state updates (function 0x11).
+     * Called whenever charging state changes (SOC, current, status, mode).
+     * @param callback Function to call with updated battery state
+     */
+    void onChargeState(ChargeStateCallback callback) {
+        chargeStateCallbacks.push_back(callback);
+    }
+    
+    /**
+     * Register callback for climate state updates (function 0x12).
+     * Called whenever climate state changes (on/off, temp, heating/cooling).
+     * @param callback Function to call with updated climate state
+     */
+    void onClimateState(ClimateStateCallback callback) {
+        climateStateCallbacks.push_back(callback);
+    }
+    
+    /**
+     * Process a CAN frame directly (for new architecture).
+     * Alternative to using BapChannelRouter - allows domain managers to
+     * route directly to this channel from VehicleManager.
+     * @param canId CAN ID (must match RX ID)
+     * @param data Frame data
+     * @param dlc Data length code
+     * @return true if frame was processed
+     */
+    bool processFrame(uint32_t canId, const uint8_t* data, uint8_t dlc);
     
     // =========================================================================
     // Command State Machine
@@ -282,8 +327,15 @@ public:
     }
     
 private:
-    VehicleState& state;
     VehicleManager* manager;
+    
+    // BAP frame assembly
+    BapProtocol::BapFrameAssembler frameAssembler;
+    
+    // Callback subscribers (for new domain-based architecture)
+    std::vector<PlugStateCallback> plugStateCallbacks;
+    std::vector<ChargeStateCallback> chargeStateCallbacks;
+    std::vector<ClimateStateCallback> climateStateCallbacks;
     
     // Command state machine
     CommandState commandState = CommandState::IDLE;
@@ -365,6 +417,14 @@ private:
      * @param reason Failure reason (nullptr for success)
      */
     void emitCommandEvent(const char* eventName, const char* reason);
+    
+    /**
+     * Notify all registered callbacks (for new domain-based architecture).
+     * Called after state is updated. Keep FAST - just data copying.
+     */
+    void notifyPlugStateCallbacks(const PlugState& plugData);
+    void notifyChargeStateCallbacks(const BatteryState& batteryData);
+    void notifyClimateStateCallbacks(const ClimateState& climateData);
     
     void processPlugState(const uint8_t* payload, uint8_t len);
     void processChargeState(const uint8_t* payload, uint8_t len);

@@ -3,7 +3,16 @@
 #include "protocols/BapProtocol.h"
 
 VehicleManager::VehicleManager(CanManager *canMgr)
-    : canManager(canMgr), bodyDomain(state, this), batteryDomain(state, this), driveDomain(state, this), climateDomain(state, this), gpsDomain(state, this), rangeDomain(state, this), batteryControlChannel(state, this), profileManager(this)
+    : canManager(canMgr), 
+      batteryControlChannel(this), 
+      profileManager(this), 
+      batteryManager(this), 
+      climateManager(this), 
+      bodyManager(this), 
+      driveManager(this), 
+      gpsManager(this), 
+      rangeManager(this),
+      wakeController(canMgr)
 {
     // Create mutex for thread-safe state access (Core 0 CAN task + Core 1 main loop)
     stateMutex = xSemaphoreCreateMutex();
@@ -11,9 +20,6 @@ VehicleManager::VehicleManager(CanManager *canMgr)
     {
         Serial.println("[VehicleManager] CRITICAL: Failed to create state mutex!");
     }
-
-    // Register BAP channels with router
-    bapRouter.registerChannel(&batteryControlChannel);
 }
 
 VehicleManager::~VehicleManager()
@@ -31,15 +37,29 @@ bool VehicleManager::setup()
 
     // Initialize state
     state = VehicleState();
+    
+    // Initialize services
+    Serial.println("[VehicleManager] Initializing services...");
+    activityTracker.setup();
+    wakeController.setup();
+    
+    // Initialize domain managers
+    Serial.println("[VehicleManager] === Domain Manager Initialization ===");
+    batteryManager.setup();
+    climateManager.setup();
+    bodyManager.setup();
+    driveManager.setup();
+    gpsManager.setup();
+    rangeManager.setup();
+    Serial.println("[VehicleManager] === All Managers Initialized ===");
 
-    Serial.println("[VehicleManager] Domains initialized:");
-    Serial.println("[VehicleManager]   - BodyDomain (0x3D0, 0x3D1, 0x583)");
-    Serial.println("[VehicleManager]   - BatteryDomain (0x5CA, 0x59E, 0x483)");
-    Serial.println("[VehicleManager]   - DriveDomain (0x3C0, 0x0FD, 0x6B2)");
-    Serial.println("[VehicleManager]   - ClimateDomain (0x66E, 0x5E1)");
-    Serial.println("[VehicleManager]   - GpsDomain (0x484, 0x485, 0x486)");
-    Serial.println("[VehicleManager]   - RangeDomain (0x5F5, 0x5F7)");
-    Serial.println("[VehicleManager]   - BapChannelRouter (BAP frame routing)");
+    Serial.println("[VehicleManager] Domain managers initialized:");
+    Serial.println("[VehicleManager]   - BatteryManager (0x5CA, 0x59E, 0x483 + BAP)");
+    Serial.println("[VehicleManager]   - ClimateManager (0x66E, 0x5E1 + BAP)");
+    Serial.println("[VehicleManager]   - BodyManager (0x3D0, 0x3D1, 0x583)");
+    Serial.println("[VehicleManager]   - DriveManager (0x3C0, 0x0FD, 0x6B2)");
+    Serial.println("[VehicleManager]   - GpsManager (0x484, 0x485, 0x486)");
+    Serial.println("[VehicleManager]   - RangeManager (0x5F5, 0x5F7)");
     Serial.println("[VehicleManager]   - BatteryControlChannel (0x17332510 BAP RX)");
     Serial.println("[VehicleManager]   - Wake State Machine (integrated)");
     Serial.println("[VehicleManager]   - ChargingProfileManager (high-level charging/climate API)");
@@ -50,14 +70,8 @@ bool VehicleManager::setup()
 
 void VehicleManager::loop()
 {
-    // Clear initialization flag after first loop iteration
-    // This allows CAN activity tracking after startup is complete
-    if (canInitializing) {
-        canInitializing = false;
-    }
-    
-    // Update wake state machine (from main loop on Core 1)
-    updateWakeStateMachine();
+    // Update wake state machine using services
+    wakeController.loop(activityTracker.isActive());
 
     // Update channel command state machines
     batteryControlChannel.loop();
@@ -134,18 +148,17 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc
     }
 
     // Count every frame, but only mark activity after initialization
-    // This prevents spurious "vehicle awake" detection during CAN startup
-    if (!canInitializing) {
-        state.markCanActivity();
-    }
+    // Mark CAN activity in both state and tracker
+    state.markCanActivity();
+    activityTracker.onCanActivity();
 
     // Extended frames: only BAP
     if (extended)
     {
-        // Route all BAP frames (0x1733xxxx range) to BAP router
+        // Route all BAP frames (0x1733xxxx range) to BatteryControlChannel
         if ((canId & 0xFFFF0000) == 0x17330000)
         {
-            if (bapRouter.processFrame(canId, data, dlc))
+            if (batteryControlChannel.processFrame(canId, data, dlc))
             {
                 bapFrames++;
             }
@@ -162,54 +175,42 @@ void VehicleManager::onCanFrame(uint32_t canId, const uint8_t *data, uint8_t dlc
         return;
     }
 
-    // Standard frames: O(1) switch routing
+    // Standard frames: O(1) switch routing to domain managers
     switch (canId)
     {
     case 0x0FD:
     case 0x3C0:
     case 0x6B2:
-        if (driveDomain.processFrame(canId, data, dlc))
-            driveFrames++;
-        else
-            unhandledFrames++;
+        driveManager.processCanFrame(canId, data, dlc);
+        driveFrames++;
         break;
     case 0x3D0:
     case 0x3D1:
     case 0x583:
-        if (bodyDomain.processFrame(canId, data, dlc))
-            bodyFrames++;
-        else
-            unhandledFrames++;
+        bodyManager.processCanFrame(canId, data, dlc);
+        bodyFrames++;
         break;
     case 0x484:
     case 0x485:
     case 0x486:
-        if (gpsDomain.processFrame(canId, data, dlc))
-            gpsFrames++;
-        else
-            unhandledFrames++;
+        gpsManager.processCanFrame(canId, data, dlc);
+        gpsFrames++;
         break;
     case 0x483:
     case 0x59E:
     case 0x5CA:
-        if (batteryDomain.processFrame(canId, data, dlc))
-            batteryFrames++;
-        else
-            unhandledFrames++;
+        batteryManager.processCanFrame(canId, data, dlc);
+        batteryFrames++;
         break;
     case 0x5E1:
     case 0x66E:
-        if (climateDomain.processFrame(canId, data, dlc))
-            climateFrames++;
-        else
-            unhandledFrames++;
+        climateManager.processCanFrame(canId, data, dlc);
+        climateFrames++;
         break;
     case 0x5F5:
     case 0x5F7:
-        if (rangeDomain.processFrame(canId, data, dlc))
-            rangeFrames++;
-        else
-            unhandledFrames++;
+        rangeManager.processCanFrame(canId, data, dlc);
+        rangeFrames++;
         break;
     default:
         unhandledFrames++;
@@ -293,106 +294,88 @@ void VehicleManager::logStatistics()
 
     Serial.printf("[VehicleManager] Vehicle awake: %s\r\n", snapshot.isAwake() ? "YES" : "NO");
 
-    // Body status
-    const BodyState &body = snapshot.body;
-    Serial.printf("[VehicleManager] Lock: %s (raw: b2=0x%02X b7=0x%02X)\r\n",
-                  body.centralLock == LockState::LOCKED ? "LOCKED" : body.centralLock == LockState::UNLOCKED ? "UNLOCKED"
-                                                                                                             : "UNKNOWN",
-                  body.zv02_byte2, body.zv02_byte7);
-
-    Serial.printf("[VehicleManager] Driver door: %s %s, window: %.0f%% (updated: %lu)\r\n",
-                  body.driverDoor.open ? "OPEN" : "closed",
-                  body.driverDoor.locked ? "locked" : "unlocked",
-                  body.driverDoor.windowPercent(),
-                  body.driverDoor.lastUpdate);
-
-    Serial.printf("[VehicleManager] Passenger door: %s %s, window: %.0f%% (updated: %lu)\r\n",
-                  body.passengerDoor.open ? "OPEN" : "closed",
-                  body.passengerDoor.locked ? "locked" : "unlocked",
-                  body.passengerDoor.windowPercent(),
-                  body.passengerDoor.lastUpdate);
-
-    // Battery status
-    const BatteryState &batt = snapshot.battery;
-    uint32_t bms07, bms06, motorHybrid06;
-    batteryDomain.getFrameCounts(bms07, bms06, motorHybrid06);
-    Serial.printf("[VehicleManager] Battery frames: 0x5CA:%lu 0x59E:%lu 0x483:%lu\r\n", bms07, bms06, motorHybrid06);
-    Serial.printf("[VehicleManager] Battery: energy=%.0f/%.0fWh (%.0f%%) temp=%.1f°C power=%.2fkW\r\n",
-                  batt.energyWh, batt.maxEnergyWh,
-                  batt.maxEnergyWh > 0 ? (batt.energyWh / batt.maxEnergyWh * 100.0f) : 0.0f,
-                  batt.temperature, batt.powerKw);
-    Serial.printf("[VehicleManager] Charging: %s (source:%s), Balancing: %s\r\n",
-                  batt.charging ? "YES" : "no",
-                  batt.chargingSource == DataSource::BAP ? "BAP" : batt.chargingSource == DataSource::CAN_STD ? "CAN"
-                                                                                                              : "none",
-                  batt.balancingActive ? "YES" : "no");
-
-    // Drive status
-    const DriveState &drv = snapshot.drive;
-    const char *ignStr;
-    switch (drv.ignition)
+    // BodyManager stats
     {
-    case IgnitionState::OFF:
-        ignStr = "OFF";
-        break;
-    case IgnitionState::ACCESSORY:
-        ignStr = "ACCESSORY";
-        break;
-    case IgnitionState::ON:
-        ignStr = "ON";
-        break;
-    case IgnitionState::START:
-        ignStr = "START";
-        break;
-    default:
-        ignStr = "UNKNOWN";
-        break;
+        uint32_t driverDoorFrames, passengerDoorFrames, lockStatusFrames;
+        bodyManager.getFrameCounts(driverDoorFrames, passengerDoorFrames, lockStatusFrames);
+        const BodyManager::State& bodyState = bodyManager.getState();
+        Serial.printf("[VehicleManager] BodyManager: frames=0x3D0:%lu 0x3D1:%lu 0x583:%lu\r\n",
+                      driverDoorFrames, passengerDoorFrames, lockStatusFrames);
+        Serial.printf("[VehicleManager] Body: locked:%s driver_door:%s passenger_door:%s\r\n",
+                      bodyState.isLocked() ? "YES" : "no",
+                      bodyState.driverDoor.open ? "OPEN" : "closed",
+                      bodyState.passengerDoor.open ? "OPEN" : "closed");
     }
-    Serial.printf("[VehicleManager] Ignition: %s (key:%d ign:%d start:%d) (updated: %lu)\r\n",
-                  ignStr, drv.keyInserted, drv.ignitionOn, drv.startRequested, drv.ignitionUpdate);
-    Serial.printf("[VehicleManager] Speed: %.1f km/h (updated: %lu)\r\n", drv.speedKmh, drv.speedUpdate);
-    Serial.printf("[VehicleManager] Odometer: %lu km (updated: %lu)\r\n", drv.odometerKm, drv.odometerUpdate);
-    Serial.printf("[VehicleManager] Vehicle time: %04u-%02u-%02u %02u:%02u:%02u\r\n",
-                  drv.year, drv.month, drv.day, drv.hour, drv.minute, drv.second);
-
-    // Climate status
-    const ClimateState &clim = snapshot.climate;
-    Serial.printf("[VehicleManager] Temps: inside=%.1f°C (source:%s) outside=%.1f°C\r\n",
-                  clim.insideTemp,
-                  clim.insideTempSource == DataSource::BAP ? "BAP" : "CAN",
-                  clim.outsideTemp);
-    Serial.printf("[VehicleManager] Climate: %s (source:%s) heat:%d cool:%d vent:%d defrost:%d time:%dmin\r\n",
-                  clim.climateActive ? "ACTIVE" : "off",
-                  clim.climateActiveSource == DataSource::BAP ? "BAP" : "CAN",
-                  clim.heating, clim.cooling, clim.ventilation, clim.autoDefrost, clim.climateTimeMin);
-
-    // GPS status
-    const CanGpsState &gps = snapshot.gps;
-    Serial.printf("[VehicleManager] GPS: %s (%d sats, HDOP: %.1f)\r\n",
-                  gps.fixTypeStr(), gps.satellites, gps.hdop);
-    if (gps.hasFix())
+    
+    // BatteryManager stats
     {
-        Serial.printf("[VehicleManager] Position: %.6f, %.6f alt:%.0fm heading:%.1f°\r\n",
-                      gps.latitude, gps.longitude, gps.altitude, gps.heading);
+        uint32_t bms07, bms06, motorHybrid06, plugCallbacks, chargeCallbacks;
+        batteryManager.getFrameCounts(bms07, bms06, motorHybrid06);
+        batteryManager.getCallbackCounts(plugCallbacks, chargeCallbacks);
+        const BatteryManager::State& battState = batteryManager.getState();
+        Serial.printf("[VehicleManager] BatteryManager: frames=0x5CA:%lu 0x59E:%lu 0x483:%lu callbacks=plug:%lu charge:%lu\r\n",
+                      bms07, bms06, motorHybrid06, plugCallbacks, chargeCallbacks);
+        Serial.printf("[VehicleManager] Battery: SOC=%.0f%% (source:%s) energy=%.0f/%.0fWh plugged:%s charging:%s\r\n",
+                      battState.soc,
+                      battState.socSource == DataSource::BAP ? "BAP" : battState.socSource == DataSource::CAN_STD ? "CAN" : "none",
+                      battState.energyWh, battState.maxEnergyWh,
+                      battState.plugState.isPlugged() ? "YES" : "no",
+                      battState.charging ? "YES" : "no");
     }
 
-    // Range status
-    const RangeState &rng = snapshot.range;
-    if (rng.isValid())
+    // DriveManager stats
     {
-        Serial.printf("[VehicleManager] Range: %d km (electric: %d km) %s\r\n",
-                      rng.totalRangeKm, rng.electricRangeKm, rng.tendencyStr());
-        Serial.printf("[VehicleManager] Consumption: %.1f %s, Reserve:%s\r\n",
-                      rng.consumption, rng.consumptionUnit == 0 ? "kWh/100km" : "km/kWh",
-                      rng.reserveWarning ? "YES" : "no");
+        uint32_t klemmenFrames, esp21Frames, diagnoseFrames;
+        driveManager.getFrameCounts(klemmenFrames, esp21Frames, diagnoseFrames);
+        const DriveManager::State& driveState = driveManager.getState();
+        Serial.printf("[VehicleManager] DriveManager: frames=0x3C0:%lu 0x0FD:%lu 0x6B2:%lu\r\n",
+                      klemmenFrames, esp21Frames, diagnoseFrames);
+        const char* ignStr = driveState.ignition == IgnitionState::OFF ? "OFF" :
+                            driveState.ignition == IgnitionState::ACCESSORY ? "ACCESSORY" :
+                            driveState.ignition == IgnitionState::ON ? "ON" :
+                            driveState.ignition == IgnitionState::START ? "START" : "UNKNOWN";
+        Serial.printf("[VehicleManager] Drive: ignition:%s speed:%.1fkm/h odometer:%lukm\r\n",
+                      ignStr, driveState.speedKmh, driveState.odometerKm);
     }
 
-    // BAP assembler debug stats
-    uint32_t shortMsgs, longMsgs, longStarts, longConts, contErrors, pendingOverflows, staleReplacements;
-    uint8_t pendingCount, maxPendingCount;
-    bapRouter.getAssemblerStats(shortMsgs, longMsgs, longStarts, longConts, contErrors, pendingOverflows, staleReplacements, pendingCount, maxPendingCount);
-    Serial.printf("[VehicleManager] BAP Assembler: short=%lu long=%lu (starts=%lu conts=%lu) errors: cont=%lu overflow=%lu stale=%lu pending=%u max=%u\r\n",
-                  shortMsgs, longMsgs, longStarts, longConts, contErrors, pendingOverflows, staleReplacements, pendingCount, maxPendingCount);
+    // ClimateManager stats
+    {
+        uint32_t klima03, klimaSensor02, climateCallbacks;
+        climateManager.getFrameCounts(klima03, klimaSensor02);
+        climateCallbacks = climateManager.getCallbackCount();
+        const ClimateManager::State& climState = climateManager.getState();
+        Serial.printf("[VehicleManager] ClimateManager: frames=0x66E:%lu 0x5E1:%lu callbacks=%lu\r\n",
+                      klima03, klimaSensor02, climateCallbacks);
+        Serial.printf("[VehicleManager] Climate: inside=%.1f°C (source:%s) outside=%.1f°C active:%s\r\n",
+                      climState.insideTemp,
+                      climState.insideTempSource == DataSource::BAP ? "BAP" : climState.insideTempSource == DataSource::CAN_STD ? "CAN" : "none",
+                      climState.outsideTemp,
+                      climState.climateActive ? "YES" : "no");
+    }
+    
+    // GpsManager stats
+    {
+        uint32_t navData01Frames, navData02Frames, navPos01Frames;
+        gpsManager.getFrameCounts(navData01Frames, navData02Frames, navPos01Frames);
+        const GpsManager::State& gpsState = gpsManager.getState();
+        Serial.printf("[VehicleManager] GpsManager: frames=0x484:%lu 0x485:%lu 0x486:%lu\r\n",
+                      navData01Frames, navData02Frames, navPos01Frames);
+        Serial.printf("[VehicleManager] GPS: fix:%s sats:%d pos:%.6f,%.6f\r\n",
+                      gpsState.fixTypeStr(), gpsState.satellites,
+                      gpsState.latitude, gpsState.longitude);
+    }
+    
+    // RangeManager stats
+    {
+        uint32_t reichweite01Frames, reichweite02Frames;
+        rangeManager.getFrameCounts(reichweite01Frames, reichweite02Frames);
+        const RangeManager::State& rangeState = rangeManager.getState();
+        Serial.printf("[VehicleManager] RangeManager: frames=0x5F5:%lu 0x5F7:%lu\r\n",
+                      reichweite01Frames, reichweite02Frames);
+        Serial.printf("[VehicleManager] Range: total:%dkm electric:%dkm display:%dkm tendency:%s\r\n",
+                      rangeState.totalRangeKm, rangeState.electricRangeKm,
+                      rangeState.displayRangeKm, rangeState.tendencyStr());
+    }
 
     // BAP command statistics
     uint32_t cmdQueued, cmdCompleted, cmdFailed;
@@ -401,279 +384,36 @@ void VehicleManager::logStatistics()
                   cmdQueued, cmdCompleted, cmdFailed,
                   cmdQueued > 0 ? (cmdCompleted * 100.0f / cmdQueued) : 100.0f);
 
-    // BAP status (consolidated into main state)
-    const PlugState &plug = snapshot.plug;
-    const BatteryState &batt2 = snapshot.battery;
-    const ClimateState &clim2 = snapshot.climate;
-
-    if (plug.isValid())
+    // BAP Plug status (from BatteryManager)
+    const BatteryManager::State& battState = batteryManager.getState();
+    if (battState.plugState.isValid())
     {
         Serial.printf("[VehicleManager] BAP Plug: %s (supply:%s lock:%d)\r\n",
-                      plug.plugStateStr(),
-                      plug.hasSupply() ? "yes" : "no",
-                      plug.lockState);
+                      battState.plugState.plugStateStr(),
+                      battState.plugState.hasSupply() ? "yes" : "no",
+                      battState.plugState.lockState);
     }
 
-    if (batt2.socSource == DataSource::BAP || batt2.chargingDetailsUpdate > 0)
+    // BAP Charge detail (from BatteryManager)
+    if (battState.socSource == DataSource::BAP || battState.chargingUpdate > 0)
     {
         Serial.printf("[VehicleManager] BAP Charge: SOC=%.0f%% mode=%d status=%d amps=%d target=%d%% time=%dmin\r\n",
-                      batt2.soc,
-                      batt2.chargingMode,
-                      batt2.chargingStatus,
-                      batt2.chargingAmps,
-                      batt2.targetSoc,
-                      batt2.remainingTimeMin);
+                      battState.soc,
+                      battState.chargingMode,
+                      battState.chargingStatus,
+                      battState.chargingAmps,
+                      battState.targetSoc,
+                      battState.remainingTimeMin);
     }
 
-    // BAP Climate detail (only show when BAP is source)
-    if (clim2.climateActiveSource == DataSource::BAP && clim2.climateActive)
+    // BAP Climate detail (from ClimateManager)
+    const ClimateManager::State& climState = climateManager.getState();
+    if (climState.climateActiveSource == DataSource::BAP && climState.climateActive)
     {
         Serial.printf("[VehicleManager] BAP Climate Detail: heat:%d cool:%d vent:%d defrost:%d temp:%.1f°C time:%dmin\r\n",
-                      clim2.heating, clim2.cooling, clim2.ventilation, clim2.autoDefrost,
-                      clim2.insideTemp, clim2.climateTimeMin);
+                      climState.heating, climState.cooling, climState.ventilation, climState.autoDefrost,
+                      climState.insideTemp, climState.climateTimeMin);
     }
 
     Serial.println("[VehicleManager] ======================");
-}
-
-// =============================================================================
-// Wake State Machine
-// =============================================================================
-
-bool VehicleManager::requestWake()
-{
-    // If already waking or awake, don't restart
-    if (wakeState == WakeState::WAKING || wakeState == WakeState::AWAKE)
-    {
-        Serial.printf("[VehicleManager] Wake already in progress/complete (state=%s)\r\n",
-                      getWakeStateName());
-        return true;
-    }
-
-    // If vehicle already awake (via CAN activity), skip wake sequence
-    // Thread-safe check with mutex
-    bool vehicleAwake = false;
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE)
-    {
-        vehicleAwake = state.isAwake();
-        xSemaphoreGive(stateMutex);
-    }
-
-    if (vehicleAwake)
-    {
-        Serial.println("[VehicleManager] Vehicle already awake (CAN active)");
-        setWakeState(WakeState::AWAKE);
-        startKeepAlive();
-        return true;
-    }
-
-    // Request wake
-    Serial.println("[VehicleManager] Wake requested");
-    setWakeState(WakeState::WAKE_REQUESTED);
-    lastWakeActivity = millis();
-    wakeAttempts++;
-
-    return true;
-}
-
-bool VehicleManager::isAwake() const
-{
-    return wakeState == WakeState::AWAKE;
-}
-
-const char *VehicleManager::getWakeStateName() const
-{
-    switch (wakeState)
-    {
-    case WakeState::ASLEEP:
-        return "ASLEEP";
-    case WakeState::WAKE_REQUESTED:
-        return "WAKE_REQUESTED";
-    case WakeState::WAKING:
-        return "WAKING";
-    case WakeState::AWAKE:
-        return "AWAKE";
-    default:
-        return "UNKNOWN";
-    }
-}
-
-void VehicleManager::updateWakeStateMachine()
-{
-    unsigned long now = millis();
-    unsigned long elapsed = now - wakeStateStartTime;
-
-    // Always track vehicle state based on CAN activity (thread-safe read)
-    bool vehicleHasCanActivity = false;
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(100)) == pdTRUE)
-    {
-        vehicleHasCanActivity = state.isAwake();
-        xSemaphoreGive(stateMutex);
-    }
-
-    // Update keep-alive management
-    if (keepAliveActive)
-    {
-        // Stop keep-alive after timeout (no commands for 5 minutes)
-        if (now - lastWakeActivity > KEEPALIVE_TIMEOUT)
-        {
-            Serial.println("[VehicleManager] Keep-alive timeout (5 min since last command)");
-            stopKeepAlive();
-            // Don't force ASLEEP - let vehicle naturally go to sleep
-        }
-
-        // Send keep-alive frame every 500ms while active
-        if (now - lastKeepAlive >= KEEPALIVE_INTERVAL)
-        {
-            sendKeepAliveFrame();
-            lastKeepAlive = now;
-        }
-    }
-
-    // Process state transitions
-    switch (wakeState)
-    {
-    case WakeState::ASLEEP:
-        // Check if vehicle woke up naturally (door open, key fob, etc.)
-        if (vehicleHasCanActivity)
-        {
-            Serial.println("[VehicleManager] Vehicle woke up (CAN activity detected)");
-            setWakeState(WakeState::AWAKE);
-        }
-        break;
-
-    case WakeState::WAKE_REQUESTED:
-        // Send wake sequence
-        Serial.println("[VehicleManager] Initiating wake sequence...");
-
-        // Send wake frame
-        if (!sendWakeFrame())
-        {
-            Serial.println("[VehicleManager] Failed to send wake frame");
-            setWakeState(WakeState::ASLEEP);
-            wakeFailed++;
-            break;
-        }
-
-        // Start keep-alive immediately
-        startKeepAlive();
-
-        // Small delay before BAP init
-        delay(100);
-
-        // Send BAP init
-        if (!sendBapInitFrame())
-        {
-            Serial.println("[VehicleManager] Failed to send BAP init frame");
-            stopKeepAlive();
-            setWakeState(WakeState::ASLEEP);
-            wakeFailed++;
-            break;
-        }
-
-        // Transition to WAKING
-        setWakeState(WakeState::WAKING);
-        break;
-
-    case WakeState::WAKING:
-        // Check if vehicle has woken up (CAN activity)
-        if (vehicleHasCanActivity)
-        {
-            // Wait for BAP initialization
-            if (elapsed >= BAP_INIT_WAIT)
-            {
-                Serial.printf("[VehicleManager] Vehicle awake after %lums\r\n", elapsed);
-                setWakeState(WakeState::AWAKE);
-            }
-        }
-        // Check for wake timeout
-        else if (elapsed > WAKE_TIMEOUT)
-        {
-            Serial.println("[VehicleManager] Wake timeout - no CAN activity");
-            stopKeepAlive();
-            setWakeState(WakeState::ASLEEP);
-            wakeFailed++;
-        }
-        break;
-
-    case WakeState::AWAKE:
-        // Vehicle went to sleep naturally (no CAN activity)
-        if (!vehicleHasCanActivity)
-        {
-            Serial.println("[VehicleManager] Vehicle went to sleep (no CAN activity)");
-            stopKeepAlive();
-            setWakeState(WakeState::ASLEEP);
-        }
-        break;
-    }
-}
-
-bool VehicleManager::sendWakeFrame()
-{
-    uint8_t wakeData[4] = {0x40, 0x00, 0x01, 0x1F};
-    Serial.println("[VehicleManager] Sending wake frame (0x17330301)");
-    return sendCanFrame(CAN_ID_WAKE, wakeData, 4, true);
-}
-
-bool VehicleManager::sendBapInitFrame()
-{
-    uint8_t bapInitData[8] = {0x67, 0x10, 0x41, 0x84, 0x14, 0x00, 0x00, 0x00};
-    Serial.println("[VehicleManager] Sending BAP init frame (0x1B000067)");
-    return sendCanFrame(CAN_ID_BAP_INIT, bapInitData, 8, true);
-}
-
-bool VehicleManager::sendKeepAliveFrame()
-{
-    uint8_t keepAliveData[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-
-    if (sendCanFrame(CAN_ID_KEEPALIVE, keepAliveData, 8, false))
-    {
-        keepAlivesSent++;
-        return true;
-    }
-
-    Serial.println("[VehicleManager] Failed to send keep-alive frame");
-    return false;
-}
-
-void VehicleManager::startKeepAlive()
-{
-    if (!keepAliveActive)
-    {
-        Serial.println("[VehicleManager] Starting keep-alive (500ms interval)");
-        keepAliveActive = true;
-        lastKeepAlive = millis();
-        lastWakeActivity = millis();
-
-        // Send first keep-alive immediately
-        sendKeepAliveFrame();
-    }
-}
-
-void VehicleManager::stopKeepAlive()
-{
-    if (keepAliveActive)
-    {
-        Serial.println("[VehicleManager] Stopping keep-alive");
-        keepAliveActive = false;
-    }
-}
-
-void VehicleManager::setWakeState(WakeState newState)
-{
-    if (wakeState != newState)
-    {
-        Serial.printf("[VehicleManager] Wake: %s -> %s\r\n",
-                      getWakeStateName(),
-                      [this, newState]()
-                      {
-                          WakeState temp = wakeState;
-                          wakeState = newState;
-                          const char *name = getWakeStateName();
-                          wakeState = temp;
-                          return name;
-                      }());
-        wakeState = newState;
-        wakeStateStartTime = millis();
-    }
 }

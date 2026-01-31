@@ -182,65 +182,66 @@ CommandResult VehicleHandler::handleRequestState(CommandContext& ctx) {
 CommandResult VehicleHandler::handleGetState(CommandContext& ctx) {
     Serial.println("[VEHICLE] Getting current vehicle state...");
     
-    // Get current state snapshot
-    VehicleState state = vehicleManager->getStateCopy();
+    // NEW ARCHITECTURE: Get state from domain managers
+    const BatteryManager::State& battState = vehicleManager->battery()->getState();
+    const ClimateManager::State& climState = vehicleManager->climate()->getState();
+    const BodyManager::State& bodyState = vehicleManager->body()->getState();
+    const DriveManager::State& driveState = vehicleManager->drive()->getState();
     
     CommandResult result = CommandResult::ok();
     
     // Battery state (unified)
     JsonObject battery = result.data["battery"].to<JsonObject>();
-    battery["soc"] = state.battery.soc;
-    battery["socSource"] = state.battery.socSource == DataSource::BAP ? "bap" : "can";
-    battery["voltage"] = state.battery.voltage;
-    battery["current"] = state.battery.current;
-    battery["powerKw"] = state.battery.powerKw;
-    battery["temperature"] = state.battery.temperature;
-    battery["charging"] = state.battery.charging;
-    battery["chargingSource"] = state.battery.chargingSource == DataSource::BAP ? "bap" : "can";
+    battery["soc"] = battState.soc;
+    battery["socSource"] = battState.socSource == DataSource::BAP ? "bap" : "can";
+    battery["powerKw"] = battState.powerKw;
+    battery["temperature"] = battState.temperature;
+    battery["charging"] = battState.charging;
+    battery["chargingSource"] = battState.chargingSource == DataSource::BAP ? "bap" : "can";
     
-    // Charging details (from BAP)
-    if (state.battery.chargingDetailsUpdate > 0) {
-        battery["chargingMode"] = state.battery.chargingMode;
-        battery["chargingStatus"] = state.battery.chargingStatus;
-        battery["chargingAmps"] = state.battery.chargingAmps;
-        battery["targetSoc"] = state.battery.targetSoc;
-        battery["remainingMin"] = state.battery.remainingTimeMin;
+    // Charging details (from BAP) - available when chargingUpdate is non-zero
+    if (battState.chargingUpdate > 0) {
+        battery["chargingMode"] = battState.chargingMode;
+        battery["chargingStatus"] = battState.chargingStatus;
+        battery["chargingAmps"] = battState.chargingAmps;
+        battery["targetSoc"] = battState.targetSoc;
+        battery["remainingMin"] = battState.remainingTimeMin;
     }
     
     // Drive state
     JsonObject drive = result.data["drive"].to<JsonObject>();
-    drive["ignitionOn"] = state.drive.ignitionOn;
-    drive["speedKmh"] = state.drive.speedKmh;
-    drive["odometerKm"] = state.drive.odometerKm;
+    drive["ignitionOn"] = driveState.ignitionOn;
+    drive["speedKmh"] = driveState.speedKmh;
+    drive["odometerKm"] = driveState.odometerKm;
     
     // Body state
     JsonObject body = result.data["body"].to<JsonObject>();
-    body["locked"] = state.body.isLocked();
-    body["anyDoorOpen"] = state.body.anyDoorOpen();
-    body["trunkOpen"] = state.body.trunkOpen;
+    body["locked"] = bodyState.isLocked();
+    body["anyDoorOpen"] = bodyState.anyDoorOpen();
+    body["trunkOpen"] = bodyState.trunkOpen;
     
-    // Plug state (BAP)
-    if (state.plug.isValid()) {
+    // Plug state (BAP) - from battery manager
+    if (battState.plugState.isValid()) {
         JsonObject plug = result.data["plug"].to<JsonObject>();
-        plug["plugged"] = state.plug.isPlugged();
-        plug["hasSupply"] = state.plug.hasSupply();
-        plug["state"] = state.plug.plugStateStr();
+        plug["plugged"] = battState.plugState.isPlugged();
+        plug["hasSupply"] = battState.plugState.hasSupply();
+        plug["state"] = battState.plugState.plugStateStr();
     }
     
     // Climate state (unified)
     JsonObject climate = result.data["climate"].to<JsonObject>();
-    climate["insideTemp"] = state.climate.insideTemp;
-    climate["outsideTemp"] = state.climate.outsideTemp;
-    climate["active"] = state.climate.climateActive;
-    climate["heating"] = state.climate.heating;
-    climate["cooling"] = state.climate.cooling;
-    climate["ventilation"] = state.climate.ventilation;
-    climate["autoDefrost"] = state.climate.autoDefrost;
-    climate["remainingMin"] = state.climate.climateTimeMin;
+    climate["insideTemp"] = climState.insideTemp;
+    climate["outsideTemp"] = climState.outsideTemp;
+    climate["active"] = climState.climateActive;
+    climate["heating"] = climState.heating;
+    climate["cooling"] = climState.cooling;
+    climate["ventilation"] = climState.ventilation;
+    climate["autoDefrost"] = climState.autoDefrost;
+    climate["remainingMin"] = climState.climateTimeMin;
     
-    // Meta info
-    result.data["vehicleAwake"] = state.isAwake();
-    result.data["canFrameCount"] = state.canFrameCount;
+    // Meta info - keep using VehicleManager for global state
+    result.data["vehicleAwake"] = vehicleManager->isVehicleAwake();
+    result.data["canFrameCount"] = vehicleManager->getFrameCount();
     
     return result;
 }

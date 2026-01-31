@@ -6,10 +6,32 @@
 
 using namespace BapProtocol;
 
-BatteryControlChannel::BatteryControlChannel(VehicleState& state, VehicleManager* mgr)
-    : state(state)
-    , manager(mgr)
+BatteryControlChannel::BatteryControlChannel(VehicleManager* mgr)
+    : manager(mgr)
 {
+}
+
+// =============================================================================
+// Frame Processing (for new domain-based architecture)
+// =============================================================================
+
+bool BatteryControlChannel::processFrame(uint32_t canId, const uint8_t* data, uint8_t dlc) {
+    // This method is called directly from VehicleManager in the new architecture
+    // (bypassing BapChannelRouter)
+    
+    if (canId != CAN_ID_RX) {
+        return false;  // Not our channel
+    }
+    
+    // Assemble multi-frame BAP message
+    BapProtocol::BapMessage msg;
+    if (frameAssembler.processFrame(data, dlc, msg)) {
+        // Complete message assembled - process it
+        return processMessage(msg);
+    }
+    
+    // Frame accepted but message not complete yet (waiting for continuation frames)
+    return true;
 }
 
 // =============================================================================
@@ -82,12 +104,16 @@ void BatteryControlChannel::processPlugState(const uint8_t* payload, uint8_t len
     
     PlugStateData decoded = decodePlugState(payload, len);
     
-    PlugState& plug = state.plug;
-    plug.lockSetup = decoded.lockSetup;
-    plug.lockState = decoded.lockState;
-    plug.supplyState = static_cast<uint8_t>(decoded.supplyState);
-    plug.plugState = static_cast<uint8_t>(decoded.plugState);
-    plug.lastUpdate = millis();
+    // Build PlugState structure to pass to callbacks
+    PlugState plugData;
+    plugData.lockSetup = decoded.lockSetup;
+    plugData.lockState = decoded.lockState;
+    plugData.supplyState = static_cast<uint8_t>(decoded.supplyState);
+    plugData.plugState = static_cast<uint8_t>(decoded.plugState);
+    plugData.lastUpdate = millis();
+    
+    // Notify subscribers (pass by const reference)
+    notifyPlugStateCallbacks(plugData);
     
     // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }
@@ -102,27 +128,31 @@ void BatteryControlChannel::processChargeState(const uint8_t* payload, uint8_t l
     
     ChargeStateData decoded = decodeChargeState(payload, len);
     
-    BatteryState& battery = state.battery;
+    // Build BatteryState structure to pass to callbacks
+    BatteryState batteryData;
     
     // Update unified SOC field (BAP source - takes priority over CAN)
-    battery.soc = decoded.socPercent;
-    battery.socSource = DataSource::BAP;
-    battery.socUpdate = millis();
+    batteryData.soc = decoded.socPercent;
+    batteryData.socSource = DataSource::BAP;
+    batteryData.socUpdate = millis();
     
     // Update unified charging field (BAP source - more detailed than CAN)
-    battery.charging = (decoded.chargeMode != ChargeMode::OFF && 
+    batteryData.charging = (decoded.chargeMode != ChargeMode::OFF && 
                         decoded.chargeMode != ChargeMode::INIT &&
                         decoded.chargeStatus == ChargeStatus::RUNNING);
-    battery.chargingSource = DataSource::BAP;
-    battery.chargingUpdate = millis();
+    batteryData.chargingSource = DataSource::BAP;
+    batteryData.chargingUpdate = millis();
     
     // Store detailed charging info
-    battery.chargingMode = static_cast<uint8_t>(decoded.chargeMode);
-    battery.chargingStatus = static_cast<uint8_t>(decoded.chargeStatus);
-    battery.chargingAmps = decoded.chargingAmps;
-    battery.targetSoc = decoded.targetSoc;
-    battery.remainingTimeMin = decoded.remainingTimeMin;
-    battery.chargingDetailsUpdate = millis();
+    batteryData.chargingMode = static_cast<uint8_t>(decoded.chargeMode);
+    batteryData.chargingStatus = static_cast<uint8_t>(decoded.chargeStatus);
+    batteryData.chargingAmps = decoded.chargingAmps;
+    batteryData.targetSoc = decoded.targetSoc;
+    batteryData.remainingTimeMin = decoded.remainingTimeMin;
+    batteryData.chargingDetailsUpdate = millis();
+    
+    // Notify subscribers (new architecture)
+    notifyChargeStateCallbacks(batteryData);
 }
 
 void BatteryControlChannel::processClimateState(const uint8_t* payload, uint8_t len) {
@@ -133,24 +163,28 @@ void BatteryControlChannel::processClimateState(const uint8_t* payload, uint8_t 
     
     ClimateStateData decoded = decodeClimateState(payload, len);
     
-    ClimateState& climate = state.climate;
+    // Build ClimateState structure
+    ClimateState climateData;
     
     // Update unified climate fields (BAP source - provides detailed mode info)
-    climate.climateActive = decoded.climateActive;
-    climate.climateActiveSource = DataSource::BAP;
-    climate.heating = decoded.heating;
-    climate.cooling = decoded.cooling;
-    climate.ventilation = decoded.ventilation;
-    climate.autoDefrost = decoded.autoDefrost;
-    climate.climateTimeMin = decoded.climateTimeMin;
-    climate.climateActiveUpdate = millis();
+    climateData.climateActive = decoded.climateActive;
+    climateData.climateActiveSource = DataSource::BAP;
+    climateData.heating = decoded.heating;
+    climateData.cooling = decoded.cooling;
+    climateData.ventilation = decoded.ventilation;
+    climateData.autoDefrost = decoded.autoDefrost;
+    climateData.climateTimeMin = decoded.climateTimeMin;
+    climateData.climateActiveUpdate = millis();
     
     // Update inside temperature if climate is active (BAP priority)
     if (decoded.climateActive) {
-        climate.insideTemp = decoded.currentTempC;
-        climate.insideTempSource = DataSource::BAP;
-        climate.insideTempUpdate = millis();
+        climateData.insideTemp = decoded.currentTempC;
+        climateData.insideTempSource = DataSource::BAP;
+        climateData.insideTempUpdate = millis();
     }
+    
+    // Notify subscribers (new architecture)
+    notifyClimateStateCallbacks(climateData);
     
     // NO SERIAL OUTPUT - This runs on CAN task (Core 0)
 }
@@ -1023,4 +1057,41 @@ void BatteryControlChannel::emitCommandEvent(const char* eventName, const char* 
     
     // Send event
     router->sendEvent("vehicle", eventName, &details);
+}
+
+// =============================================================================
+// Callback Notifications (for new domain-based architecture)
+// =============================================================================
+
+void BatteryControlChannel::notifyPlugStateCallbacks(const PlugState& plugData) {
+    // Called from CAN thread - keep FAST (just data copying)
+    if (plugStateCallbacks.empty()) return;
+    
+    for (const auto& callback : plugStateCallbacks) {
+        if (callback) {
+            callback(plugData);
+        }
+    }
+}
+
+void BatteryControlChannel::notifyChargeStateCallbacks(const BatteryState& batteryData) {
+    // Called from CAN thread - keep FAST (just data copying)
+    if (chargeStateCallbacks.empty()) return;
+    
+    for (const auto& callback : chargeStateCallbacks) {
+        if (callback) {
+            callback(batteryData);
+        }
+    }
+}
+
+void BatteryControlChannel::notifyClimateStateCallbacks(const ClimateState& climateData) {
+    // Called from CAN thread - keep FAST (just data copying)
+    if (climateStateCallbacks.empty()) return;
+    
+    for (const auto& callback : climateStateCallbacks) {
+        if (callback) {
+            callback(climateData);
+        }
+    }
 }

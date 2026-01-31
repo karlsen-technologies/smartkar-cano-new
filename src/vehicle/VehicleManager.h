@@ -4,16 +4,19 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include "VehicleState.h"
-#include "domains/BodyDomain.h"
-#include "domains/BatteryDomain.h"
-#include "domains/DriveDomain.h"
-#include "domains/ClimateDomain.h"
-#include "domains/GpsDomain.h"
-#include "domains/RangeDomain.h"
-#include "bap/BapChannelRouter.h"
 #include "bap/channels/BatteryControlChannel.h"
 #include "ChargingProfileManager.h"
 #include "../core/IModule.h"  // For ActivityCallback
+#include "services/ActivityTracker.h"
+#include "services/WakeController.h"
+
+// Domain-based architecture
+#include "domains/BatteryManager.h"
+#include "domains/ClimateManager.h"
+#include "domains/BodyManager.h"
+#include "domains/DriveManager.h"
+#include "domains/GpsManager.h"
+#include "domains/RangeManager.h"
 
 // Enable this to track unique CAN IDs seen (adds overhead to CAN task)
 // #define DEBUG_CAN_IDS  // DISABLED - no longer needed
@@ -48,22 +51,12 @@ class CanManager;
  * - BatteryControlChannel: BAP protocol for Battery Control (Device 0x25)
  * 
  * Wake State Machine:
- * - Integrated wake/keep-alive management
+ * - Managed by WakeController service
  * - States: ASLEEP, WAKE_REQUESTED, WAKING, AWAKE
  * - Non-blocking state transitions in loop()
  */
 class VehicleManager {
 public:
-    /**
-     * Wake state machine states
-     */
-    enum class WakeState {
-        ASLEEP,          // Vehicle CAN bus inactive
-        WAKE_REQUESTED,  // Command requested wake, need to start sequence
-        WAKING,          // Wake frames sent, waiting for CAN activity  
-        AWAKE            // Vehicle responding, ready for commands
-    };
-    
     /**
      * Construct the vehicle manager.
      * @param canManager Pointer to the CAN manager for TX/RX
@@ -138,27 +131,71 @@ public:
     ChargingProfileManager& profiles() { return profileManager; }
     
     /**
+     * Get the new BatteryManager (domain-based architecture).
+     * NOTE: Running in parallel with old BatteryDomain for testing.
+     */
+    BatteryManager* battery() { return &batteryManager; }
+    
+    /**
+     * Get the new ClimateManager (domain-based architecture).
+     * NOTE: Running in parallel with old ClimateDomain for testing.
+     */
+    ClimateManager* climate() { return &climateManager; }
+    
+    /**
+     * Get the new BodyManager (domain-based architecture).
+     * NOTE: Running in parallel with old BodyDomain for testing.
+     */
+    BodyManager* body() { return &bodyManager; }
+    
+    /**
+     * Get the new DriveManager (domain-based architecture).
+     * NOTE: Running in parallel with old DriveDomain for testing.
+     */
+    DriveManager* drive() { return &driveManager; }
+    
+    /**
+     * Get the new GpsManager (domain-based architecture).
+     * NOTE: Running in parallel with old GpsDomain for testing.
+     */
+    GpsManager* gps() { return &gpsManager; }
+    
+    /**
+     * Get the new RangeManager (domain-based architecture).
+     * NOTE: Running in parallel with old RangeDomain for testing.
+     */
+    RangeManager* range() { return &rangeManager; }
+    
+    /**
      * Request vehicle wake (non-blocking).
      * Sets WAKE_REQUESTED state. State machine in loop() will handle wake sequence.
      * @return true if wake requested, false if already waking/awake
      */
-    bool requestWake();
+    bool requestWake() {
+        return wakeController.requestWake();
+    }
     
     /**
      * Check if vehicle is awake and ready for commands.
      * @return true if in AWAKE state
      */
-    bool isAwake() const;
+    bool isAwake() const {
+        return wakeController.isAwake();
+    }
     
     /**
      * Get current wake state.
      */
-    WakeState getWakeState() const { return wakeState; }
+    WakeController::WakeState getWakeState() const {
+        return wakeController.getState();
+    }
     
     /**
      * Get wake state as string (for logging).
      */
-    const char* getWakeStateName() const;
+    const char* getWakeStateName() const {
+        return wakeController.getStateName();
+    }
     
     // =========================================================================
     // Configuration
@@ -177,46 +214,23 @@ private:
     VehicleState state;
     SemaphoreHandle_t stateMutex = nullptr;  // FreeRTOS mutex for thread-safe state access
     
-    // Domains
-    BodyDomain bodyDomain;
-    BatteryDomain batteryDomain;
-    DriveDomain driveDomain;
-    ClimateDomain climateDomain;
-    GpsDomain gpsDomain;
-    RangeDomain rangeDomain;
+    // Domain managers (NEW ARCHITECTURE - Phase 2-4 complete)
+    BatteryManager batteryManager;
+    ClimateManager climateManager;
+    BodyManager bodyManager;
+    DriveManager driveManager;
+    GpsManager gpsManager;
+    RangeManager rangeManager;
     
     // BAP infrastructure
-    BapChannelRouter bapRouter;
     BatteryControlChannel batteryControlChannel;
     
     // Charging profile manager (high-level API for charging/climate)
     ChargingProfileManager profileManager;
     
-    // Wake state machine
-    WakeState wakeState = WakeState::ASLEEP;
-    unsigned long wakeStateStartTime = 0;  // When current state was entered
-    bool canInitializing = true;            // Ignore CAN activity during first loop after init
-    
-    // Keep-alive management
-    bool keepAliveActive = false;
-    unsigned long lastKeepAlive = 0;
-    unsigned long lastWakeActivity = 0;  // Last time a command requested wake
-    
-    // Wake statistics
-    uint32_t wakeAttempts = 0;
-    uint32_t keepAlivesSent = 0;
-    uint32_t wakeFailed = 0;
-    
-    // Wake timing constants
-    static constexpr unsigned long KEEPALIVE_INTERVAL = 500;      // Send keep-alive every 500ms
-    static constexpr unsigned long KEEPALIVE_TIMEOUT = 300000;    // Stop after 5 minutes of inactivity
-    static constexpr unsigned long BAP_INIT_WAIT = 2000;          // Wait 2s after wake for BAP init
-    static constexpr unsigned long WAKE_TIMEOUT = 10000;          // Give up if no CAN activity after 10s
-    
-    // Wake CAN IDs
-    static constexpr uint32_t CAN_ID_WAKE = 0x17330301;      // Wake frame (extended)
-    static constexpr uint32_t CAN_ID_BAP_INIT = 0x1B000067;  // BAP initialization (extended)
-    static constexpr uint32_t CAN_ID_KEEPALIVE = 0x5A7;      // Keep-alive heartbeat (standard)
+    // Services
+    ActivityTracker activityTracker;
+    WakeController wakeController;
     
     // Configuration
     bool verbose = false;
@@ -239,39 +253,4 @@ private:
      * Log statistics to serial (called periodically).
      */
     void logStatistics();
-    
-    /**
-     * Update wake state machine (called from loop()).
-     */
-    void updateWakeStateMachine();
-    
-    /**
-     * Send wake frame to vehicle.
-     */
-    bool sendWakeFrame();
-    
-    /**
-     * Send BAP initialization frame.
-     */
-    bool sendBapInitFrame();
-    
-    /**
-     * Send keep-alive frame.
-     */
-    bool sendKeepAliveFrame();
-    
-    /**
-     * Start keep-alive heartbeat.
-     */
-    void startKeepAlive();
-    
-    /**
-     * Stop keep-alive heartbeat.
-     */
-    void stopKeepAlive();
-    
-    /**
-     * Change wake state with logging.
-     */
-    void setWakeState(WakeState newState);
 };

@@ -9,136 +9,137 @@ VehicleProvider::VehicleProvider(VehicleManager* vehicleManager)
 void VehicleProvider::getTelemetry(JsonObject& data) {
     if (!vehicleManager) return;
     
-    // Get a consistent copy of vehicle state
-    VehicleState state = vehicleManager->getStateCopy();
+    // NEW ARCHITECTURE: Get state from domain managers
+    const BatteryManager::State& battState = vehicleManager->battery()->getState();
+    const ClimateManager::State& climState = vehicleManager->climate()->getState();
+    const BodyManager::State& bodyState = vehicleManager->body()->getState();
+    const DriveManager::State& driveState = vehicleManager->drive()->getState();
+    const GpsManager::State& gpsState = vehicleManager->gps()->getState();
+    const RangeManager::State& rangeState = vehicleManager->range()->getState();
     
     // === Battery state (unified) ===
     JsonObject battery = data["battery"].to<JsonObject>();
     
     // SOC (BAP primary, includes source tracking)
-    if (state.battery.hasSoc()) {
-        battery["soc"] = state.battery.soc;
-        battery["socSource"] = state.battery.socSource == DataSource::BAP ? "bap" : "can";
+    if (battState.socSource != DataSource::NONE && battState.soc > 0.0f) {
+        battery["soc"] = battState.soc;
+        battery["socSource"] = battState.socSource == DataSource::BAP ? "bap" : "can";
     }
     
     // Charging status (unified from CAN + BAP)
-    battery["charging"] = state.battery.charging;
-    battery["chargingSource"] = state.battery.chargingSource == DataSource::BAP ? "bap" : 
-                                 state.battery.chargingSource == DataSource::CAN_STD ? "can" : "none";
+    battery["charging"] = battState.charging;
+    battery["chargingSource"] = battState.chargingSource == DataSource::BAP ? "bap" : 
+                                 battState.chargingSource == DataSource::CAN_STD ? "can" : "none";
     
     // Charging details (from BAP when available)
-    if (state.battery.chargingDetailsUpdate > 0) {
-        battery["chargingMode"] = static_cast<uint8_t>(state.battery.chargingMode);
-        battery["chargingStatus"] = static_cast<uint8_t>(state.battery.chargingStatus);
-        battery["chargingAmps"] = state.battery.chargingAmps;
-        battery["targetSoc"] = state.battery.targetSoc;
-        battery["remainingMin"] = state.battery.remainingTimeMin;
+    if (battState.chargingUpdate > 0) {
+        battery["chargingMode"] = static_cast<uint8_t>(battState.chargingMode);
+        battery["chargingStatus"] = static_cast<uint8_t>(battState.chargingStatus);
+        battery["chargingAmps"] = battState.chargingAmps;
+        battery["targetSoc"] = battState.targetSoc;
+        battery["remainingMin"] = battState.remainingTimeMin;
     }
     
     // Power and energy (CAN)
-    battery["powerKw"] = state.battery.powerKw;
-    battery["energyWh"] = state.battery.energyWh;
-    battery["maxEnergyWh"] = state.battery.maxEnergyWh;
-    battery["temperature"] = state.battery.temperature;
-    battery["balancing"] = state.battery.balancingActive;
-    
-    // Voltage/current (NOT AVAILABLE on comfort CAN)
-    if (state.battery.voltageUpdate > 0) {
-        battery["voltage"] = state.battery.voltage;
-        battery["current"] = state.battery.current;
-    }
+    battery["powerKw"] = battState.powerKw;
+    battery["energyWh"] = battState.energyWh;
+    battery["maxEnergyWh"] = battState.maxEnergyWh;
+    battery["temperature"] = battState.temperature;
+    battery["balancing"] = battState.balancingActive;
     
     // === Drive state ===
     JsonObject drive = data["drive"].to<JsonObject>();
-    drive["ignition"] = static_cast<uint8_t>(state.drive.ignition);
-    drive["keyInserted"] = state.drive.keyInserted;
-    drive["ignitionOn"] = state.drive.ignitionOn;
-    drive["speedKmh"] = state.drive.speedKmh;
-    drive["odometerKm"] = state.drive.odometerKm;
+    drive["ignition"] = static_cast<uint8_t>(driveState.ignition);
+    drive["keyInserted"] = driveState.keyInserted;
+    drive["ignitionOn"] = driveState.ignitionOn;
+    drive["speedKmh"] = driveState.speedKmh;
+    drive["odometerKm"] = driveState.odometerKm;
     
     // === Body state ===
     JsonObject body = data["body"].to<JsonObject>();
-    body["locked"] = state.body.isLocked();
-    body["centralLock"] = static_cast<uint8_t>(state.body.centralLock);
-    body["trunkOpen"] = state.body.trunkOpen;
-    body["anyDoorOpen"] = state.body.anyDoorOpen();
+    body["locked"] = bodyState.isLocked();
+    body["centralLock"] = static_cast<uint8_t>(bodyState.centralLock);
+    body["trunkOpen"] = bodyState.trunkOpen;
+    body["anyDoorOpen"] = bodyState.anyDoorOpen();
     
     // Individual doors
     JsonObject doors = body["doors"].to<JsonObject>();
-    doors["driverOpen"] = state.body.driverDoor.open;
-    doors["passengerOpen"] = state.body.passengerDoor.open;
-    doors["rearLeftOpen"] = state.body.rearLeftDoor.open;
-    doors["rearRightOpen"] = state.body.rearRightDoor.open;
+    doors["driverOpen"] = bodyState.driverDoor.open;
+    doors["passengerOpen"] = bodyState.passengerDoor.open;
+    doors["rearLeftOpen"] = bodyState.rearLeftDoor.open;
+    doors["rearRightOpen"] = bodyState.rearRightDoor.open;
     
     // === Range state ===
-    if (state.range.isValid()) {
+    if (rangeState.isValid()) {
         JsonObject range = data["range"].to<JsonObject>();
-        range["totalKm"] = state.range.totalRangeKm;
-        range["electricKm"] = state.range.electricRangeKm;
-        range["displayKm"] = state.range.displayRangeKm;
-        range["consumption"] = state.range.consumption;
-        range["tendency"] = state.range.tendencyStr();
-        range["reserveWarning"] = state.range.reserveWarning;
+        range["totalKm"] = rangeState.totalRangeKm;
+        range["electricKm"] = rangeState.electricRangeKm;
+        range["displayKm"] = rangeState.displayRangeKm;
+        range["consumption"] = rangeState.consumptionKwh100km;
+        range["tendency"] = rangeState.tendencyStr();
+        range["reserveWarning"] = rangeState.reserveWarning;
     }
     
     // === CAN GPS state (if valid) ===
-    if (state.gps.isValid()) {
+    if (gpsState.isValid()) {
         JsonObject gps = data["canGps"].to<JsonObject>();
-        gps["lat"] = state.gps.latitude;
-        gps["lng"] = state.gps.longitude;
-        gps["alt"] = state.gps.altitude;
-        gps["heading"] = state.gps.heading;
-        gps["satellites"] = state.gps.satsInUse;
-        gps["fixType"] = state.gps.fixTypeStr();
-        gps["hdop"] = state.gps.hdop;
+        gps["lat"] = gpsState.latitude;
+        gps["lng"] = gpsState.longitude;
+        gps["alt"] = gpsState.altitude;
+        gps["heading"] = gpsState.heading;
+        gps["satellites"] = gpsState.satsInUse;
+        gps["fixType"] = gpsState.fixTypeStr();
+        gps["hdop"] = gpsState.hdop;
     }
     
     // === Climate state (unified) ===
     JsonObject climate = data["climate"].to<JsonObject>();
     
     // Temperature (with source tracking)
-    climate["insideTemp"] = state.climate.insideTemp;
-    climate["insideTempSource"] = state.climate.insideTempSource == DataSource::BAP ? "bap" : "can";
-    climate["outsideTemp"] = state.climate.outsideTemp;
+    climate["insideTemp"] = climState.insideTemp;
+    climate["insideTempSource"] = climState.insideTempSource == DataSource::BAP ? "bap" : "can";
+    climate["outsideTemp"] = climState.outsideTemp;
     
     // Climate control (BAP-only with source tracking)
-    climate["active"] = state.climate.climateActive;
-    if (state.climate.climateActiveSource == DataSource::BAP) {
+    climate["active"] = climState.climateActive;
+    if (climState.climateActiveSource == DataSource::BAP) {
         climate["activeSource"] = "bap";  // Only BAP provides climate active status (CAN unreliable)
     }
-    climate["heating"] = state.climate.heating;       // BAP only
-    climate["cooling"] = state.climate.cooling;       // BAP only
-    climate["ventilation"] = state.climate.ventilation;  // BAP only
-    climate["autoDefrost"] = state.climate.autoDefrost;  // BAP only
-    climate["remainingMin"] = state.climate.climateTimeMin;  // BAP only
+    climate["heating"] = climState.heating;       // BAP only
+    climate["cooling"] = climState.cooling;       // BAP only
+    climate["ventilation"] = climState.ventilation;  // BAP only
+    climate["autoDefrost"] = climState.autoDefrost;  // BAP only
+    climate["remainingMin"] = climState.climateTimeMin;  // BAP only
     
     // === Plug state (BAP only) ===
-    if (state.plug.isValid()) {
+    if (battState.plugState.isValid()) {
         JsonObject plug = data["plug"].to<JsonObject>();
-        plug["plugged"] = state.plug.isPlugged();
-        plug["hasSupply"] = state.plug.hasSupply();
-        plug["state"] = state.plug.plugStateStr();
-        plug["lockState"] = state.plug.lockState;
+        plug["plugged"] = battState.plugState.isPlugged();
+        plug["hasSupply"] = battState.plugState.hasSupply();
+        plug["state"] = battState.plugState.plugStateStr();
+        plug["lockState"] = battState.plugState.lockState;
     }
     
     // === Meta ===
-    data["vehicleAwake"] = state.isAwake();
-    data["canFrameCount"] = state.canFrameCount;
+    data["vehicleAwake"] = vehicleManager->isVehicleAwake();
+    data["canFrameCount"] = vehicleManager->getFrameCount();
 }
 
 TelemetryPriority VehicleProvider::getPriority() {
     if (!vehicleManager) return TelemetryPriority::PRIORITY_LOW;
     
-    VehicleState state = vehicleManager->getStateCopy();
+    // NEW ARCHITECTURE: Get state from domain managers
+    const BatteryManager::State& battState = vehicleManager->battery()->getState();
+    const DriveManager::State& driveState = vehicleManager->drive()->getState();
     
     // High priority for significant events
-    if (state.drive.ignitionOn != lastIgnitionOn) {
+    if (driveState.ignitionOn != lastIgnitionOn) {
         return TelemetryPriority::PRIORITY_HIGH;
     }
-    if (state.battery.charging != lastCharging) {
+    if (battState.charging != lastCharging) {
         return TelemetryPriority::PRIORITY_HIGH;
     }
-    if (state.plug.isPlugged() != lastPlugged) {
+    if (battState.plugState.isPlugged() != lastPlugged) {
         return TelemetryPriority::PRIORITY_HIGH;
     }
     
@@ -158,10 +159,13 @@ bool VehicleProvider::hasChanged() {
     
     if (!vehicleManager) return false;
     
-    VehicleState state = vehicleManager->getStateCopy();
+    // NEW ARCHITECTURE: Get state from domain managers
+    const BatteryManager::State& battState = vehicleManager->battery()->getState();
+    const DriveManager::State& driveState = vehicleManager->drive()->getState();
+    const BodyManager::State& bodyState = vehicleManager->body()->getState();
     
     // Determine interval based on vehicle state
-    unsigned long reportInterval = state.isAwake() ? 
+    unsigned long reportInterval = vehicleManager->isVehicleAwake() ? 
         REPORT_INTERVAL_AWAKE : REPORT_INTERVAL_ASLEEP;
     
     // Check if interval has elapsed
@@ -172,39 +176,39 @@ bool VehicleProvider::hasChanged() {
     // Check for significant changes
     
     // Ignition changed
-    if (state.drive.ignitionOn != lastIgnitionOn) {
+    if (driveState.ignitionOn != lastIgnitionOn) {
         return true;
     }
     
     // Charging state changed
-    if (state.battery.charging != lastCharging) {
+    if (battState.charging != lastCharging) {
         return true;
     }
     
     // Lock state changed
-    if (state.body.isLocked() != lastLocked) {
+    if (bodyState.isLocked() != lastLocked) {
         return true;
     }
     
     // Plug state changed
-    if (state.plug.isPlugged() != lastPlugged) {
+    if (battState.plugState.isPlugged() != lastPlugged) {
         return true;
     }
     
     // SOC changed significantly (use unified soc field)
-    float socDiff = abs(state.battery.soc - lastSoc);
+    float socDiff = abs(battState.soc - lastSoc);
     if (socDiff >= SOC_CHANGE_THRESHOLD) {
         return true;
     }
     
     // Power changed significantly (useful during charging)
-    float powerDiff = abs(state.battery.powerKw - lastPowerKw);
+    float powerDiff = abs(battState.powerKw - lastPowerKw);
     if (powerDiff >= POWER_CHANGE_THRESHOLD) {
         return true;
     }
     
     // Speed changed significantly (useful when driving)
-    float speedDiff = abs(state.drive.speedKmh - lastSpeedKmh);
+    float speedDiff = abs(driveState.speedKmh - lastSpeedKmh);
     if (speedDiff >= SPEED_CHANGE_THRESHOLD) {
         return true;
     }
@@ -219,14 +223,18 @@ void VehicleProvider::onTelemetrySent() {
     
     // Update last reported values
     if (vehicleManager) {
-        VehicleState state = vehicleManager->getStateCopy();
-        lastSoc = state.battery.soc;
-        lastPowerKw = state.battery.powerKw;
-        lastIgnitionOn = state.drive.ignitionOn;
-        lastCharging = state.battery.charging;
-        lastLocked = state.body.isLocked();
-        lastPlugged = state.plug.isPlugged();
-        lastSpeedKmh = state.drive.speedKmh;
+        // NEW ARCHITECTURE: Get state from domain managers
+        const BatteryManager::State& battState = vehicleManager->battery()->getState();
+        const DriveManager::State& driveState = vehicleManager->drive()->getState();
+        const BodyManager::State& bodyState = vehicleManager->body()->getState();
+        
+        lastSoc = battState.soc;
+        lastPowerKw = battState.powerKw;
+        lastIgnitionOn = driveState.ignitionOn;
+        lastCharging = battState.charging;
+        lastLocked = bodyState.isLocked();
+        lastPlugged = battState.plugState.isPlugged();
+        lastSpeedKmh = driveState.speedKmh;
     }
 }
 
@@ -250,28 +258,32 @@ void VehicleProvider::checkAndEmitEvents() {
     }
     lastEventCheckTime = now;
     
-    VehicleState state = vehicleManager->getStateCopy();
+    // NEW ARCHITECTURE: Get state from domain managers
+    const BatteryManager::State& battState = vehicleManager->battery()->getState();
+    const ClimateManager::State& climState = vehicleManager->climate()->getState();
+    const BodyManager::State& bodyState = vehicleManager->body()->getState();
+    const DriveManager::State& driveState = vehicleManager->drive()->getState();
     
     // Initialize event tracking on first run (don't emit events for initial state)
     if (!eventsInitialized) {
-        eventIgnitionOn = state.drive.ignitionOn;
-        eventCharging = state.battery.charging;
-        eventLocked = state.body.isLocked();
-        eventPlugged = state.plug.isPlugged();
-        eventDriverDoorOpen = state.body.driverDoor.open;
-        eventPassengerDoorOpen = state.body.passengerDoor.open;
-        eventRearLeftDoorOpen = state.body.rearLeftDoor.open;
-        eventRearRightDoorOpen = state.body.rearRightDoor.open;
-        eventTrunkOpen = state.body.trunkOpen;
-        eventClimateActive = state.climate.climateActive;
-        eventLastSoc = state.battery.soc;
+        eventIgnitionOn = driveState.ignitionOn;
+        eventCharging = battState.charging;
+        eventLocked = bodyState.isLocked();
+        eventPlugged = battState.plugState.isPlugged();
+        eventDriverDoorOpen = bodyState.driverDoor.open;
+        eventPassengerDoorOpen = bodyState.passengerDoor.open;
+        eventRearLeftDoorOpen = bodyState.rearLeftDoor.open;
+        eventRearRightDoorOpen = bodyState.rearRightDoor.open;
+        eventTrunkOpen = bodyState.trunkOpen;
+        eventClimateActive = climState.climateActive;
+        eventLastSoc = battState.soc;
         eventsInitialized = true;
         return;
     }
     
     // === Ignition Events ===
-    if (state.drive.ignitionOn != eventIgnitionOn) {
-        eventIgnitionOn = state.drive.ignitionOn;
+    if (driveState.ignitionOn != eventIgnitionOn) {
+        eventIgnitionOn = driveState.ignitionOn;
         if (eventIgnitionOn) {
             Serial.println("[VEHICLE] Event: ignitionOn");
             emitEvent("ignitionOn", nullptr);
@@ -282,12 +294,12 @@ void VehicleProvider::checkAndEmitEvents() {
     }
     
     // === Charging Events ===
-    if (state.battery.charging != eventCharging) {
-        eventCharging = state.battery.charging;
+    if (battState.charging != eventCharging) {
+        eventCharging = battState.charging;
         JsonDocument doc;
         JsonObject details = doc.to<JsonObject>();
-        details["soc"] = state.battery.soc;
-        details["powerKw"] = state.battery.powerKw;
+        details["soc"] = battState.soc;
+        details["powerKw"] = battState.powerKw;
         
         if (eventCharging) {
             Serial.println("[VEHICLE] Event: chargingStarted");
@@ -299,8 +311,8 @@ void VehicleProvider::checkAndEmitEvents() {
     }
     
     // === Lock Events ===
-    if (state.body.isLocked() != eventLocked) {
-        eventLocked = state.body.isLocked();
+    if (bodyState.isLocked() != eventLocked) {
+        eventLocked = bodyState.isLocked();
         if (eventLocked) {
             Serial.println("[VEHICLE] Event: locked");
             emitEvent("locked", nullptr);
@@ -311,11 +323,11 @@ void VehicleProvider::checkAndEmitEvents() {
     }
     
     // === Plug Events ===
-    if (state.plug.isPlugged() != eventPlugged) {
-        eventPlugged = state.plug.isPlugged();
+    if (battState.plugState.isPlugged() != eventPlugged) {
+        eventPlugged = battState.plugState.isPlugged();
         JsonDocument doc;
         JsonObject details = doc.to<JsonObject>();
-        details["hasSupply"] = state.plug.hasSupply();
+        details["hasSupply"] = battState.plugState.hasSupply();
         
         if (eventPlugged) {
             Serial.println("[VEHICLE] Event: plugged");
@@ -327,8 +339,8 @@ void VehicleProvider::checkAndEmitEvents() {
     }
     
     // === Door Events ===
-    if (state.body.driverDoor.open != eventDriverDoorOpen) {
-        eventDriverDoorOpen = state.body.driverDoor.open;
+    if (bodyState.driverDoor.open != eventDriverDoorOpen) {
+        eventDriverDoorOpen = bodyState.driverDoor.open;
         JsonDocument doc;
         JsonObject details = doc.to<JsonObject>();
         details["door"] = "driver";
@@ -341,8 +353,8 @@ void VehicleProvider::checkAndEmitEvents() {
         }
     }
     
-    if (state.body.passengerDoor.open != eventPassengerDoorOpen) {
-        eventPassengerDoorOpen = state.body.passengerDoor.open;
+    if (bodyState.passengerDoor.open != eventPassengerDoorOpen) {
+        eventPassengerDoorOpen = bodyState.passengerDoor.open;
         JsonDocument doc;
         JsonObject details = doc.to<JsonObject>();
         details["door"] = "passenger";
@@ -355,8 +367,8 @@ void VehicleProvider::checkAndEmitEvents() {
         }
     }
     
-    if (state.body.rearLeftDoor.open != eventRearLeftDoorOpen) {
-        eventRearLeftDoorOpen = state.body.rearLeftDoor.open;
+    if (bodyState.rearLeftDoor.open != eventRearLeftDoorOpen) {
+        eventRearLeftDoorOpen = bodyState.rearLeftDoor.open;
         JsonDocument doc;
         JsonObject details = doc.to<JsonObject>();
         details["door"] = "rearLeft";
@@ -369,8 +381,8 @@ void VehicleProvider::checkAndEmitEvents() {
         }
     }
     
-    if (state.body.rearRightDoor.open != eventRearRightDoorOpen) {
-        eventRearRightDoorOpen = state.body.rearRightDoor.open;
+    if (bodyState.rearRightDoor.open != eventRearRightDoorOpen) {
+        eventRearRightDoorOpen = bodyState.rearRightDoor.open;
         JsonDocument doc;
         JsonObject details = doc.to<JsonObject>();
         details["door"] = "rearRight";
@@ -384,8 +396,8 @@ void VehicleProvider::checkAndEmitEvents() {
     }
     
     // === Trunk Events ===
-    if (state.body.trunkOpen != eventTrunkOpen) {
-        eventTrunkOpen = state.body.trunkOpen;
+    if (bodyState.trunkOpen != eventTrunkOpen) {
+        eventTrunkOpen = bodyState.trunkOpen;
         if (eventTrunkOpen) {
             Serial.println("[VEHICLE] Event: trunkOpened");
             emitEvent("trunkOpened", nullptr);
@@ -396,13 +408,13 @@ void VehicleProvider::checkAndEmitEvents() {
     }
     
     // === Climate Events ===
-    if (state.climate.climateActive != eventClimateActive) {
-        eventClimateActive = state.climate.climateActive;
+    if (climState.climateActive != eventClimateActive) {
+        eventClimateActive = climState.climateActive;
         JsonDocument doc;
         JsonObject details = doc.to<JsonObject>();
-        details["heating"] = state.climate.heating;
-        details["cooling"] = state.climate.cooling;
-        details["temp"] = state.climate.insideTemp;
+        details["heating"] = climState.heating;
+        details["cooling"] = climState.cooling;
+        details["temp"] = climState.insideTemp;
         
         if (eventClimateActive) {
             Serial.println("[VEHICLE] Event: climateStarted");
@@ -414,8 +426,8 @@ void VehicleProvider::checkAndEmitEvents() {
     }
     
     // === SOC Threshold Events (20%, 50%, 80%, 100%) ===
-    float currentSoc = state.battery.soc;
-    if (state.battery.hasSoc() && eventLastSoc > 0) {
+    float currentSoc = battState.soc;
+    if (battState.socSource != DataSource::NONE && battState.soc > 0.0f && eventLastSoc > 0) {
         // Check if we crossed any threshold
         int lastThreshold = (int)(eventLastSoc / 20) * 20;  // Round down to nearest 20%
         int currentThreshold = (int)(currentSoc / 20) * 20;
@@ -449,7 +461,7 @@ void VehicleProvider::checkAndEmitEvents() {
     eventLastSoc = currentSoc;
     
     // === Low Battery Event (below 20%) ===
-    if (state.battery.hasSoc() && currentSoc < 20 && eventLastSoc >= 20) {
+    if (battState.socSource != DataSource::NONE && battState.soc > 0.0f && currentSoc < 20 && eventLastSoc >= 20) {
         JsonDocument doc;
         JsonObject details = doc.to<JsonObject>();
         details["soc"] = currentSoc;
