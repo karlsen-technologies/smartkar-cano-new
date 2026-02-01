@@ -1,5 +1,6 @@
 #include "LinkManager.h"
 #include "../modem/TinyGsmSim7080Extended.h"
+#include "../vehicle/VehicleManager.h"
 #include "../util.h"
 
 #include <Arduino.h>
@@ -7,8 +8,8 @@
 
 LinkManager *LinkManager::_instance = nullptr;
 
-LinkManager::LinkManager(ModemManager *modemManager, CommandRouter *commandRouter)
-    : modemManager(modemManager), commandRouter(commandRouter)
+LinkManager::LinkManager(ModemManager *modemManager, CommandRouter *commandRouter, VehicleManager *vehicleManager)
+    : modemManager(modemManager), commandRouter(commandRouter), vehicleManager(vehicleManager)
 {
     _instance = this;
 }
@@ -506,13 +507,17 @@ void LinkManager::checkTelemetry()
     if (!commandRouter)
         return;
 
-    // Check priority to determine interval
+    // Determine base interval based on vehicle state
+    bool vehicleAwake = vehicleManager && vehicleManager->isVehicleAwake();
+    unsigned long baseInterval = vehicleAwake ? TELEMETRY_INTERVAL_AWAKE : TELEMETRY_INTERVAL_ASLEEP;
+    
+    // Check priority to potentially override base interval
     TelemetryPriority priority = commandRouter->getHighestPriority();
 
-    unsigned long interval = TELEMETRY_INTERVAL;
+    unsigned long interval = baseInterval;
     if (priority >= TelemetryPriority::PRIORITY_HIGH)
     {
-        interval = TELEMETRY_HIGH_INTERVAL;
+        interval = TELEMETRY_HIGH_INTERVAL; // 5s for urgent updates
     }
     else if (priority == TelemetryPriority::PRIORITY_REALTIME)
     {

@@ -7,7 +7,14 @@ This document describes the JSON protocol used for communication between the Sma
 
 ## Version History
 
-- **v2.2** (2026-01-30): Added full command lifecycle tracking with progress stages
+- **v2.2** (2026-01-31): 
+  - Added full command lifecycle tracking with progress stages
+  - Commands now send multiple `response` messages throughout execution (`in_progress` → `completed`/`failed`)
+  - Added command execution stages: `accepted`, `requesting_wake`, `waiting_for_wake`, `updating_profile`, `sending_command`
+  - Added `busy` response status with `currentCommand` details when another command is running
+  - Deprecated command completion events (`commandCompleted`, `commandFailed`) - replaced by response lifecycle
+  - Events now reserved for vehicle state changes only (not command lifecycle)
+  - Implemented domain-based architecture: Commands route through domain managers (BatteryManager, ClimateManager) with state machines
 - **v2.1**: Previous version with basic command/response
 - **v2.0**: Initial protocol with event system
 
@@ -308,22 +315,38 @@ Starts or updates charging session with specified profile.
 | `targetSoc` | integer | No | Target SOC % (0-100, default 80) |
 | `maxCurrent` | integer | No | Max charging current in Amps (0-32A, default 32) |
 
-**Response (Immediate):**
+**Response Sequence (Protocol v2.2):**
 ```json
-{"type":"response","data":{"id":12,"ok":true,"targetSoc":80,"maxCurrent":16,"status":"queued"}}
+// 1. Accepted
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"accepted"}}
+
+// 2. Requesting wake (if vehicle asleep)
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"requesting_wake"}}
+
+// 3. Waiting for wake
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"waiting_for_wake"}}
+
+// 4. Updating profile
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"updating_profile"}}
+
+// 5. Sending command
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"sending_command"}}
+
+// 6. Completed
+{"type":"response","data":{"id":12,"ok":true,"status":"completed","elapsedMs":5400}}
 ```
 
-**Event (When Complete):**
+**On validation failure:**
 ```json
-{"type":"event","data":{"domain":"vehicle","name":"chargingStartRequested","targetSoc":80,"maxCurrent":16}}
+{"type":"response","data":{"id":12,"ok":false,"status":"failed","stage":"accepted","error":"Invalid parameter: targetSoc must be 10-100"}}
 ```
 
-**Or on failure:**
+**On execution failure:**
 ```json
-{"type":"response","data":{"id":12,"ok":false,"status":"error","error":"Vehicle is not plugged in"}}
+{"type":"response","data":{"id":12,"ok":false,"status":"failed","stage":"waiting_for_wake","error":"Wake timeout after 15000ms","elapsedMs":15100}}
 ```
 
-**Note:** Returns immediately. Command is queued and executed asynchronously. Requires vehicle to be plugged in.
+**Note:** Command execution is tracked through multiple progress responses. All responses include the original command `id` for correlation. Not all stages may appear (e.g., if vehicle is already awake).
 
 ---
 
@@ -335,17 +358,19 @@ Stops the current charging session.
 {"type":"command","data":{"id":13,"action":"vehicle.stopCharging"}}
 ```
 
-**Response:**
+**Response Sequence:**
 ```json
-{"type":"response","data":{"id":13,"ok":true,"status":"queued"}}
+// 1. Accepted
+{"type":"response","data":{"id":13,"ok":true,"status":"in_progress","stage":"accepted"}}
+
+// 2. Sending command (vehicle likely already awake)
+{"type":"response","data":{"id":13,"ok":true,"status":"in_progress","stage":"sending_command"}}
+
+// 3. Completed
+{"type":"response","data":{"id":13,"ok":true,"status":"completed","elapsedMs":1200}}
 ```
 
-**Event:**
-```json
-{"type":"event","data":{"domain":"vehicle","name":"chargingStopRequested"}}
-```
-
-**Note:** Returns immediately with status "queued". Command is executed asynchronously.
+**Note:** Stop commands typically execute faster than start commands since no profile update is needed. Track progress through multiple responses.
 
 ---
 
@@ -362,17 +387,28 @@ Starts climate control (heating/cooling/ventilation).
 | `temperature` (or `temp`) | float | No | Target temperature in °C (15.5-30.0, default 21.0) |
 | `allowBattery` | boolean | No | Allow climate on battery power (default: true) |
 
-**Response:**
+**Response Sequence:**
 ```json
-{"type":"response","data":{"id":14,"ok":true,"temperature":21.0,"allowBattery":true,"status":"queued"}}
+// 1. Accepted
+{"type":"response","data":{"id":14,"ok":true,"status":"in_progress","stage":"accepted"}}
+
+// 2. Requesting wake (if needed)
+{"type":"response","data":{"id":14,"ok":true,"status":"in_progress","stage":"requesting_wake"}}
+
+// 3. Waiting for wake
+{"type":"response","data":{"id":14,"ok":true,"status":"in_progress","stage":"waiting_for_wake"}}
+
+// 4. Updating profile
+{"type":"response","data":{"id":14,"ok":true,"status":"in_progress","stage":"updating_profile"}}
+
+// 5. Sending command
+{"type":"response","data":{"id":14,"ok":true,"status":"in_progress","stage":"sending_command"}}
+
+// 6. Completed
+{"type":"response","data":{"id":14,"ok":true,"status":"completed","elapsedMs":5400}}
 ```
 
-**Event:**
-```json
-{"type":"event","data":{"domain":"vehicle","name":"climateStartRequested","temperature":21.0,"allowBattery":true}}
-```
-
-**Note:** Returns immediately with status "queued". Watch for events to confirm actual start/failure.
+**Note:** Track command execution through multiple progress responses. Stages depend on vehicle state (e.g., skip wake stages if already awake).
 
 ---
 
@@ -384,17 +420,19 @@ Stops climate control.
 {"type":"command","data":{"id":15,"action":"vehicle.stopClimate"}}
 ```
 
-**Response:**
+**Response Sequence:**
 ```json
-{"type":"response","data":{"id":15,"ok":true,"status":"queued"}}
+// 1. Accepted
+{"type":"response","data":{"id":15,"ok":true,"status":"in_progress","stage":"accepted"}}
+
+// 2. Sending command
+{"type":"response","data":{"id":15,"ok":true,"status":"in_progress","stage":"sending_command"}}
+
+// 3. Completed
+{"type":"response","data":{"id":15,"ok":true,"status":"completed","elapsedMs":800}}
 ```
 
-**Event:**
-```json
-{"type":"event","data":{"domain":"vehicle","name":"climateStopRequested"}}
-```
-
-**Note:** Returns immediately with status "queued". Command is executed asynchronously.
+**Note:** Stop commands execute quickly with no profile update needed. Track progress through responses.
 
 ---
 
@@ -1017,18 +1055,16 @@ Sent immediately when important state changes occur. Used for real-time notifica
 
 ---
 
-#### Command Completion Events
+#### Command Completion Events (DEPRECATED in v2.2)
+
+**⚠️ DEPRECATED:** These events are replaced by command lifecycle responses in Protocol v2.2. Use the multi-stage response system instead (see Command Execution Stages above).
 
 | Event Name | Details | Description |
 |------------|---------|-------------|
-| `commandCompleted` | `action` | Async command succeeded |
-| `commandFailed` | `action`, `error` | Async command failed |
+| `commandCompleted` | `action` | *(Legacy)* Async command succeeded |
+| `commandFailed` | `action`, `error` | *(Legacy)* Async command failed |
 
-**Examples:**
-```json
-{"type":"event","data":{"domain":"vehicle","name":"commandCompleted","action":"startCharging"}}
-{"type":"event","data":{"domain":"vehicle","name":"commandFailed","action":"startClimate","error":"Battery too low"}}
-```
+**Migration Note:** In v2.2, command progress is tracked through multiple `response` messages with the same command `id`, not through events. Events are now reserved for vehicle state changes only.
 
 ---
 
@@ -1056,10 +1092,12 @@ This allows the server to distinguish between:
 
 ## Error Handling
 
-### Command Errors
+### Validation Errors
+
+Parameter validation failures return immediately with `failed` status:
 
 ```json
-{"type":"response","data":{"id":5,"ok":false,"status":"error","error":"Invalid parameter: targetSoc must be 50-100"}}
+{"type":"response","data":{"id":5,"ok":false,"status":"failed","stage":"accepted","error":"Invalid parameter: targetSoc must be 10-100"}}
 ```
 
 ### Unknown Commands
@@ -1068,22 +1106,93 @@ This allows the server to distinguish between:
 {"type":"response","data":{"id":6,"ok":false,"status":"not_supported","error":"Unknown action: foo.bar"}}
 ```
 
-### Async Commands (Pending)
+### Busy Response (v2.2)
 
-Commands that control the vehicle return `pending` immediately, with actual result delivered via events:
+When a command is sent while another command is executing, device returns `busy` status with details about the active command:
+
+```json
+{
+  "type":"response",
+  "data":{
+    "id":15,
+    "ok":false,
+    "status":"busy",
+    "error":"Another command is in progress",
+    "currentCommand":{
+      "id":12,
+      "action":"vehicle.startClimate",
+      "stage":"updating_profile",
+      "elapsedMs":3200
+    }
+  }
+}
+```
+
+This allows the server to:
+- Know exactly which command is blocking
+- See the active command's current stage
+- Estimate when the device will be available
+- Retry the command after the current one completes
+
+### Execution Failures
+
+Commands can fail at any stage during execution. The `stage` field indicates where the failure occurred:
+
+```json
+{
+  "type":"response",
+  "data":{
+    "id":13,
+    "ok":false,
+    "status":"failed",
+    "stage":"waiting_for_wake",
+    "error":"Wake timeout after 15000ms",
+    "elapsedMs":15100
+  }
+}
+```
+
+Common failure stages:
+- `accepted`: Validation error after initial acceptance
+- `waiting_for_wake`: Vehicle didn't wake up in time (15s timeout)
+- `updating_profile`: Profile update failed
+- `sending_command`: Failed to send BAP frames to vehicle
+
+### Async Commands (Protocol v2.2)
+
+Commands that control the vehicle send multiple responses throughout their lifecycle:
 
 ```json
 // Command
 {"type":"command","data":{"id":12,"action":"vehicle.startCharging","targetSoc":80}}
 
-// Immediate response
-{"type":"response","data":{"id":12,"ok":false,"status":"pending"}}
+// Response 1: Accepted
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"accepted"}}
 
-// Later, when charging starts (or fails)
-{"type":"event","data":{"domain":"vehicle","name":"commandCompleted","action":"startCharging"}}
-// or
-{"type":"event","data":{"domain":"vehicle","name":"commandFailed","action":"startCharging","error":"Not plugged in"}}
+// Response 2: Requesting wake
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"requesting_wake"}}
+
+// Response 3: Waiting for wake
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"waiting_for_wake"}}
+
+// Response 4: Updating profile
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"updating_profile"}}
+
+// Response 5: Sending command
+{"type":"response","data":{"id":12,"ok":true,"status":"in_progress","stage":"sending_command"}}
+
+// Response 6: Completed
+{"type":"response","data":{"id":12,"ok":true,"status":"completed","elapsedMs":5400}}
+
+// OR if failed at any stage:
+{"type":"response","data":{"id":12,"ok":false,"status":"failed","stage":"waiting_for_wake","error":"Wake timeout after 15000ms","elapsedMs":15100}}
 ```
+
+**Key Points:**
+- All responses share the same command `id` for correlation
+- Progress is tracked through `stage` field in `in_progress` responses
+- Final response has `status: "completed"` or `status: "failed"`
+- Vehicle state change events (e.g., `chargingStarted`) are separate from command lifecycle
 
 ---
 
@@ -1093,7 +1202,7 @@ Commands that control the vehicle return `pending` immediately, with actual resu
 
 1. **TCP Server** - Listen on configured port (default 4589)
 2. **Device Registry** - Map CCID to device records for authentication
-3. **Command Queue** - Store pending commands for offline devices
+3. **Command Tracking (v2.2)** - Track command state by ID, handle multiple responses per command
 4. **State Storage** - Store and query telemetry data
 5. **Event Handling** - Process events, trigger push notifications
 
@@ -1101,13 +1210,64 @@ Commands that control the vehicle return `pending` immediately, with actual resu
 
 1. **Authentication Timeout** - Disconnect if no auth request within 30 seconds
 2. **Keepalive** - Consider device offline if no message received for 10 minutes
-3. **Command Timeout** - Allow 30 seconds for synchronous command responses
-4. **Async Command Timeout** - Allow up to 60 seconds for vehicle commands (watch for completion events)
+3. **Command Timeout (v2.2)** - Allow up to 60 seconds for command completion (device sends progress updates)
+4. **Busy Handling (v2.2)** - When receiving `busy` response, wait for `currentCommand` to complete before retrying
 5. **Reconnection** - Accept reconnection and re-authentication at any time
+
+### Command Tracking (Protocol v2.2)
+
+Servers must track command state across multiple response messages:
+
+```python
+class CommandTracker:
+    def __init__(self):
+        self.active_commands = {}  # command_id -> CommandState
+    
+    def handle_response(self, response):
+        cmd_id = response["id"]
+        status = response["status"]
+        
+        if status == "in_progress":
+            # Update command progress
+            self.active_commands[cmd_id] = {
+                "stage": response["stage"],
+                "started_at": time.now() if cmd_id not in self.active_commands else self.active_commands[cmd_id]["started_at"],
+                "last_update": time.now()
+            }
+            # Update UI: Show progress (e.g., "Waking vehicle...")
+            
+        elif status == "completed":
+            # Command succeeded
+            cmd = self.active_commands.pop(cmd_id)
+            # Update UI: Success notification
+            
+        elif status == "failed":
+            # Command failed
+            cmd = self.active_commands.pop(cmd_id)
+            error = response["error"]
+            stage = response["stage"]
+            # Update UI: Error notification with context
+            
+        elif status == "busy":
+            # Device busy with another command
+            current_cmd = response["currentCommand"]
+            # Option 1: Retry after current command completes
+            # Option 2: Show user "Device busy, please wait"
+```
+
+**Best Practices:**
+- Store `started_at` timestamp when receiving first `in_progress` response
+- Update UI on each `stage` change to show progress to user
+- Calculate timeout from `started_at`, not from last response
+- Handle `busy` responses by tracking the blocking command's progress
+- Clean up command state on `completed` or `failed`
 
 ### Message Parsing
 
 ```python
+# Initialize command tracker
+command_tracker = CommandTracker()
+
 while socket.connected:
     line = socket.readline()
     message = json.loads(line)
@@ -1115,15 +1275,30 @@ while socket.connected:
     match message["type"]:
         case "auth":
             handle_auth(message["data"])
+        
         case "response":
-            handle_response(message["data"])
+            # Handle command response (v2.2: may be one of many)
+            command_tracker.handle_response(message["data"])
+        
         case "state":
+            # Periodic telemetry update
             store_state(message["data"])
+        
         case "event":
-            process_event(message["data"])  # trigger push notifications
+            # Immediate notification (vehicle state changes only in v2.2)
+            process_event(message["data"])
+            # Examples: chargingStarted, doorOpened, ignitionOn
+        
         case "bye":
+            # Device going offline intentionally
             handle_bye(message["data"])
 ```
+
+**v2.2 Migration Notes:**
+- `response` messages now arrive multiple times per command (not just once)
+- Events are for vehicle state changes only (not command completion)
+- Track command progress by `id` across multiple responses
+- Final response has `status: "completed"` or `status: "failed"`
 
 ### Data Source Priority
 
@@ -1138,9 +1313,196 @@ Fields with `xxxSource` suffix (e.g., `socSource`, `chargingSource`, `insideTemp
 
 ---
 
+## Migration Guide: v2.1 → v2.2
+
+### Breaking Changes
+
+**⚠️ BREAKING:** Protocol v2.2 is not backward compatible with v2.1 server implementations.
+
+1. **Command Response Model Changed**
+   - **Old (v2.1):** Single response per command with `status: "queued"`
+   - **New (v2.2):** Multiple responses per command with progress tracking
+
+2. **Command Lifecycle Events Removed**
+   - **Removed Events:** `commandCompleted`, `commandFailed`, `chargingStartRequested`, `chargingStopRequested`, `climateStartRequested`, `climateStopRequested`
+   - **Replacement:** Track command state through multiple `response` messages linked by `id`
+
+3. **New Response Statuses**
+   - Added: `in_progress`, `completed`, `busy`
+   - Changed: `queued` → `in_progress` with `stage` field
+   - Changed: `pending` → `in_progress` with `stage` field
+
+### Required Server Changes
+
+#### 1. Update Response Handler
+
+**Before (v2.1):**
+```python
+def handle_response(response):
+    cmd_id = response["id"]
+    if response["ok"]:
+        if response.get("status") == "queued":
+            # Command accepted, wait for event
+            mark_command_pending(cmd_id)
+        else:
+            # Synchronous success
+            mark_command_complete(cmd_id, response)
+    else:
+        # Error
+        mark_command_failed(cmd_id, response["error"])
+```
+
+**After (v2.2):**
+```python
+def handle_response(response):
+    cmd_id = response["id"]
+    status = response["status"]
+    
+    if status == "in_progress":
+        # Command progressing
+        update_command_stage(cmd_id, response["stage"])
+        update_ui_progress(cmd_id, response["stage"])
+    
+    elif status == "completed":
+        # Command succeeded
+        mark_command_complete(cmd_id, response)
+        show_success_notification(cmd_id)
+    
+    elif status == "failed":
+        # Command failed
+        mark_command_failed(cmd_id, response["error"], response["stage"])
+        show_error_notification(cmd_id, response["error"])
+    
+    elif status == "busy":
+        # Another command is running
+        current = response["currentCommand"]
+        show_busy_message(f"Device busy with command {current['id']} ({current['action']})")
+        # Optionally: Queue for retry after current command completes
+```
+
+#### 2. Remove Event Handlers for Command Lifecycle
+
+**Delete these handlers:**
+```python
+# DELETE - No longer sent in v2.2
+def on_command_completed_event(event):
+    ...
+
+def on_command_failed_event(event):
+    ...
+
+def on_charging_start_requested_event(event):
+    ...
+
+def on_climate_start_requested_event(event):
+    ...
+```
+
+#### 3. Add Command Tracking
+
+```python
+class CommandTracker:
+    def __init__(self):
+        self.commands = {}  # cmd_id -> {stage, started_at, last_update}
+    
+    def update(self, cmd_id, stage):
+        if cmd_id not in self.commands:
+            self.commands[cmd_id] = {"started_at": time.now()}
+        self.commands[cmd_id]["stage"] = stage
+        self.commands[cmd_id]["last_update"] = time.now()
+    
+    def complete(self, cmd_id):
+        if cmd_id in self.commands:
+            del self.commands[cmd_id]
+    
+    def get_elapsed(self, cmd_id):
+        if cmd_id in self.commands:
+            return time.now() - self.commands[cmd_id]["started_at"]
+        return 0
+```
+
+#### 4. Update UI Progress Display
+
+Map stages to user-friendly messages:
+
+```python
+STAGE_MESSAGES = {
+    "accepted": "Command accepted",
+    "requesting_wake": "Waking vehicle...",
+    "waiting_for_wake": "Waiting for vehicle...",
+    "updating_profile": "Updating settings...",
+    "sending_command": "Sending command...",
+}
+
+def update_ui_progress(cmd_id, stage):
+    message = STAGE_MESSAGES.get(stage, f"Stage: {stage}")
+    ui.show_progress(cmd_id, message)
+```
+
+### Non-Breaking Changes
+
+These vehicle state events continue to work as before:
+- ✅ `chargingStarted` / `chargingStopped`
+- ✅ `plugged` / `unplugged`
+- ✅ `doorOpened` / `doorClosed`
+- ✅ `ignitionOn` / `ignitionOff`
+- ✅ `locked` / `unlocked`
+- ✅ `socThreshold`
+- ✅ `chargingComplete`
+- ✅ `climateStarted` / `climateStopped`
+
+### Testing Checklist
+
+- [ ] Command progress updates display correctly in UI
+- [ ] Final `completed` response triggers success notification
+- [ ] Final `failed` response shows error with context (stage + error message)
+- [ ] `busy` responses handled gracefully (show message or queue for retry)
+- [ ] Vehicle state events still trigger notifications (charging, doors, etc.)
+- [ ] Command timeout increased to 60 seconds (from 30s)
+- [ ] No errors from removed event handlers (`commandCompleted`, etc.)
+
+### Rollout Strategy
+
+**Recommended approach:**
+
+1. **Update server first** - Server can handle both v2.1 and v2.2 responses during transition
+2. **Deploy server to production** - Test with existing v2.1 devices (backward compatible)
+3. **Update firmware** - Deploy v2.2 firmware to devices gradually
+4. **Remove v2.1 compatibility** - After all devices updated, remove legacy code
+
+**Backward compatibility option:**
+
+```python
+def handle_response(response):
+    status = response.get("status")
+    
+    # v2.2 responses
+    if status in ["in_progress", "completed", "failed", "busy"]:
+        handle_v22_response(response)
+    
+    # v2.1 responses (legacy)
+    elif status == "queued":
+        handle_v21_queued_response(response)
+    
+    # Synchronous responses (both versions)
+    else:
+        handle_sync_response(response)
+```
+
+---
+
 ## Protocol Version
 
-This document describes **Protocol Version 2.1**.
+This document describes **Protocol Version 2.2**.
+
+**Changes from 2.1:**
+- Full command lifecycle tracking with multiple response messages per command
+- Command execution stages (`accepted`, `requesting_wake`, `waiting_for_wake`, `updating_profile`, `sending_command`)
+- New response statuses: `in_progress`, `completed`, `busy`
+- `busy` responses include `currentCommand` details for better debugging
+- Deprecated command lifecycle events (`commandCompleted`, `commandFailed`) - use response tracking instead
+- Events now strictly for vehicle state changes (charging, doors, ignition, etc.)
+- Single command queue enforced - only one command executes at a time
 
 **Changes from 2.0:**
 - Added vehicle control commands (wake, charging, climate)
@@ -1149,3 +1511,10 @@ This document describes **Protocol Version 2.1**.
 - Added 8 new events (doors, battery thresholds, climate, trunk)
 - Added data source tracking fields (`socSource`, `chargingSource`, etc.)
 - Changed event structure (domain is now always `"vehicle"` instead of separate domains)
+
+**Architecture Notes:**
+- Device uses domain-based architecture with state machines for command orchestration
+- Commands handled by specialized managers: BatteryManager (charging), ClimateManager (climate control)
+- ChargingProfileManager handles BAP protocol profile operations
+- VehicleManager coordinates wake sequences and CAN communication
+- All commands go through CommandRouter which enforces single-command-at-a-time policy

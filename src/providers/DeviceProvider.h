@@ -17,9 +17,10 @@ class PowerManager;
  * 
  * Sends on:
  * - Device wake (initial report)
- * - Long interval (5 minutes)
  * - Battery percent change (>5%)
  * - Charging state change
+ * 
+ * Note: Interval-based sending is controlled by LinkManager, not this provider.
  */
 class DeviceProvider : public ITelemetryProvider {
 public:
@@ -49,7 +50,6 @@ private:
     // Change tracking
     bool initialReport = true;      // First report after boot
     bool changed = false;           // Explicit change flag
-    unsigned long lastReportTime = 0;
     
     // Last reported values for change detection
     uint8_t lastBatteryPercent = 0;
@@ -57,9 +57,6 @@ private:
     
     // Wake cause (set once on boot)
     const char* wakeCause = "unknown";
-    
-    // Reporting interval (5 minutes)
-    static const unsigned long REPORT_INTERVAL = 5 * 60 * 1000;
     
     // Change threshold for battery percent
     static const uint8_t BATTERY_CHANGE_THRESHOLD = 5;

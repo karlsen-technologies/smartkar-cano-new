@@ -46,9 +46,11 @@ void WakeController::loop(bool vehicleHasCanActivity) {
     case WakeState::ASLEEP:
         // Check if vehicle woke up naturally (door open, key fob, etc.)
         if (vehicleHasCanActivity) {
-            Serial.println("[WakeController] Vehicle woke up (CAN activity detected)");
+            Serial.println("[WakeController] Vehicle woke up naturally (CAN activity detected)");
+            Serial.println("[WakeController] Keep-alive NOT started (will start when command executes)");
             setWakeState(WakeState::AWAKE);
-            startKeepAlive();
+            // Don't start keep-alive - only start when a command is executed
+            // This allows vehicle to go back to sleep naturally if no commands are active
         }
         break;
 
@@ -112,7 +114,7 @@ void WakeController::loop(bool vehicleHasCanActivity) {
     }
 }
 
-bool WakeController::requestWake(IDomain* requester) {
+bool WakeController::requestWake() {
     // If already waking or awake, don't restart
     if (wakeState == WakeState::WAKING || wakeState == WakeState::AWAKE) {
         Serial.printf("[WakeController] Wake already in progress/complete (state=%s)\r\n",
@@ -122,16 +124,22 @@ bool WakeController::requestWake(IDomain* requester) {
 
     // Request wake
     Serial.println("[WakeController] Wake requested");
-    if (requester) {
-        pendingRequester = requester;
-        Serial.printf("[WakeController] Requested by: %s\r\n", requester->getName());
-    }
     
     setWakeState(WakeState::WAKE_REQUESTED);
     notifyCommandActivity();
     wakeAttempts++;
 
     return true;
+}
+
+void WakeController::ensureAwake() {
+    // Update activity timestamp and start keep-alive if already awake
+    notifyCommandActivity();
+    
+    // If asleep, initiate wake sequence
+    if (wakeState == WakeState::ASLEEP) {
+        requestWake();
+    }
 }
 
 void WakeController::onCanActivity() {

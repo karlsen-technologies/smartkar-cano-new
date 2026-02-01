@@ -61,11 +61,6 @@ bool NetworkProvider::hasChanged() {
         return true;
     }
     
-    // Check if interval has elapsed
-    if (millis() - lastReportTime >= REPORT_INTERVAL) {
-        return true;
-    }
-    
     // Check for modem state change
     if (modemManager) {
         ModemState currentState = modemManager->getState();
@@ -94,7 +89,6 @@ bool NetworkProvider::hasChanged() {
 void NetworkProvider::onTelemetrySent() {
     initialReport = false;
     changed = false;
-    lastReportTime = millis();
     
     // Update last reported values
     if (modemManager) {

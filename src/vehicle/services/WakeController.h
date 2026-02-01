@@ -23,10 +23,11 @@ class IDomain;
  *    |______ (no CAN activity) ___________|
  * 
  * Keep-Alive Management:
- * - Starts when vehicle wakes up
- * - Sends heartbeat every 500ms
- * - Stops after 5 minutes of no command activity
- * - Prevents vehicle from going to sleep during operations
+ * - Call ensureAwake() at operation start
+ * - Call stopKeepAlive() at operation end (success or failure)
+ * - Keep-alive sends heartbeat every 500ms while active
+ * - 5-minute timeout as safety fallback (if stopKeepAlive not called)
+ * - Does NOT start on natural wake (door open, key fob, etc.)
  */
 class WakeController {
 public:
@@ -60,11 +61,27 @@ public:
     void loop(bool vehicleHasCanActivity);
 
     /**
-     * Request vehicle wake (non-blocking).
-     * @param requester Optional domain requesting wake (for tracking)
-     * @return true if wake requested, false if already waking/awake
+     * Ensure vehicle is awake with keep-alive active.
+     * Call this before performing operations that require the vehicle to stay awake.
+     * 
+     * Behavior:
+     * - If vehicle is asleep: Initiates wake sequence
+     * - If vehicle is awake: Ensures keep-alive is active
+     * - Always updates activity timestamp
+     * 
+     * After calling, check isAwake() in your state machine to determine
+     * if you need to wait for wake completion.
      */
-    bool requestWake(IDomain* requester = nullptr);
+    void ensureAwake();
+
+    /**
+     * Stop keep-alive heartbeat.
+     * Call this when an operation completes (successfully or not) and the 
+     * vehicle no longer needs to be kept awake artificially.
+     * 
+     * Safe to call multiple times - will only stop if active.
+     */
+    void stopKeepAlive();
 
     /**
      * Notify controller of CAN activity (called on every frame).
@@ -86,12 +103,6 @@ public:
      * Get wake state as string (for logging).
      */
     const char* getStateName() const;
-
-    /**
-     * Update last command activity time (extends keep-alive timeout).
-     * Call this whenever a command is initiated to keep vehicle awake.
-     */
-    void notifyCommandActivity();
 
     /**
      * Get statistics for diagnostics.
@@ -120,9 +131,6 @@ private:
     uint32_t keepAlivesSent = 0;
     uint32_t wakeFailed = 0;
 
-    // Pending wake requesters (for debugging)
-    IDomain* pendingRequester = nullptr;
-
     // Wake timing constants
     static constexpr unsigned long KEEPALIVE_INTERVAL = 500;      // Send keep-alive every 500ms
     static constexpr unsigned long KEEPALIVE_TIMEOUT = 300000;    // Stop after 5 minutes of inactivity
@@ -133,6 +141,19 @@ private:
     static constexpr uint32_t CAN_ID_WAKE = 0x17330301;      // Wake frame (extended)
     static constexpr uint32_t CAN_ID_BAP_INIT = 0x1B000067;  // BAP initialization (extended)
     static constexpr uint32_t CAN_ID_KEEPALIVE = 0x5A7;      // Keep-alive heartbeat (standard)
+
+    /**
+     * Request vehicle wake (internal).
+     * Called by ensureAwake() when vehicle is asleep.
+     * @return true if wake requested, false if already waking/awake
+     */
+    bool requestWake();
+
+    /**
+     * Update last command activity time (extends keep-alive timeout).
+     * Called by ensureAwake() to start/extend keep-alive.
+     */
+    void notifyCommandActivity();
 
     /**
      * Send wake frame to vehicle.
@@ -158,11 +179,6 @@ private:
      * Start keep-alive heartbeat.
      */
     void startKeepAlive();
-
-    /**
-     * Stop keep-alive heartbeat.
-     */
-    void stopKeepAlive();
 
     /**
      * Change wake state with logging.

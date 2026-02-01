@@ -19,9 +19,10 @@ class LinkManager;
  * 
  * Sends on:
  * - Device wake (initial report)
- * - Medium interval (2 minutes)
  * - State changes (modem state, link state)
  * - Significant signal changes (>10 dBm)
+ * 
+ * Note: Interval-based sending is controlled by LinkManager, not this provider.
  */
 class NetworkProvider : public ITelemetryProvider {
 public:
@@ -46,15 +47,11 @@ private:
     // Change tracking
     bool initialReport = true;
     bool changed = false;
-    unsigned long lastReportTime = 0;
     
     // Last reported values for change detection
     ModemState lastModemState = ModemState::OFF;
     int16_t lastSignalStrength = 0;
     bool lastLinkConnected = false;
-    
-    // Reporting interval (2 minutes)
-    static const unsigned long REPORT_INTERVAL = 2 * 60 * 1000;
     
     // Change threshold for signal strength (dBm)
     static const int16_t SIGNAL_CHANGE_THRESHOLD = 10;

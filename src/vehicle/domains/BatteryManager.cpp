@@ -216,11 +216,13 @@ bool BatteryManager::startCharging(uint8_t commandId, uint8_t targetSoc, uint8_t
     pendingTargetSoc = targetSoc;
     pendingMaxCurrent = maxCurrent;
     
+    // Ensure vehicle is awake and keep-alive is active
+    wakeController->ensureAwake();
+    
     // Start state machine
     if (!wakeController->isAwake()) {
         Serial.println("[BatteryManager] Vehicle not awake, requesting wake");
         setCommandState(CommandState::REQUESTING_WAKE);
-        wakeController->requestWake();
     } else if (needsProfileUpdate(targetSoc, maxCurrent)) {
         Serial.println("[BatteryManager] Profile needs update");
         setCommandState(CommandState::UPDATING_PROFILE);
@@ -245,11 +247,13 @@ bool BatteryManager::stopCharging(uint8_t commandId) {
     pendingCmdType = PendingCommandType::STOP_CHARGING;
     pendingCommandId = commandId;
     
+    // Ensure vehicle is awake and keep-alive is active
+    wakeController->ensureAwake();
+    
     // Stop doesn't need profile update, just execute
     if (!wakeController->isAwake()) {
         Serial.println("[BatteryManager] Vehicle not awake, requesting wake");
         setCommandState(CommandState::REQUESTING_WAKE);
-        wakeController->requestWake();
     } else {
         Serial.println("[BatteryManager] Stopping profile 0");
         setCommandState(CommandState::EXECUTING_COMMAND);
@@ -416,6 +420,9 @@ bool BatteryManager::needsProfileUpdate(uint8_t targetSoc, uint8_t maxCurrent) {
 void BatteryManager::completeCommand() {
     Serial.printf("[BatteryManager] Command %d completed successfully\r\n", pendingCommandId);
     
+    // Stop keep-alive - charging will keep vehicle awake if active
+    wakeController->stopKeepAlive();
+    
     // Reset state
     setCommandState(CommandState::IDLE);
     pendingCmdType = PendingCommandType::NONE;
@@ -426,6 +433,9 @@ void BatteryManager::completeCommand() {
 
 void BatteryManager::failCommand(const char* reason) {
     Serial.printf("[BatteryManager] Command %d failed: %s\r\n", pendingCommandId, reason);
+    
+    // Stop keep-alive - no need to keep vehicle awake
+    wakeController->stopKeepAlive();
     
     // Reset state
     setCommandState(CommandState::FAILED);

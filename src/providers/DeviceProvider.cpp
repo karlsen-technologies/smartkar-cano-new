@@ -49,11 +49,6 @@ bool DeviceProvider::hasChanged() {
         return true;
     }
     
-    // Check if interval has elapsed
-    if (millis() - lastReportTime >= REPORT_INTERVAL) {
-        return true;
-    }
-    
     // Check for battery/charging changes
     if (powerManager) {
         uint8_t currentPercent = powerManager->getBatteryPercent();
@@ -77,7 +72,6 @@ bool DeviceProvider::hasChanged() {
 void DeviceProvider::onTelemetrySent() {
     initialReport = false;
     changed = false;
-    lastReportTime = millis();
     
     // Update last reported values
     if (powerManager) {

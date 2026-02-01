@@ -74,8 +74,13 @@ void DeviceController::initModules()
     // Create modules in dependency order
     powerManager = new PowerManager();
     modemManager = new ModemManager(powerManager);
-    linkManager = new LinkManager(modemManager, commandRouter);
     canManager = new CanManager();
+    
+    // Create vehicle manager (depends on canManager, used by LinkManager for telemetry intervals)
+    vehicleManager = new VehicleManager(canManager);
+    
+    // Create LinkManager (depends on modemManager, commandRouter, vehicleManager)
+    linkManager = new LinkManager(modemManager, commandRouter, vehicleManager);
 
     // Set activity callbacks on all modules
     ActivityCallback activityCb = getActivityCallback();
@@ -144,8 +149,7 @@ void DeviceController::initModules()
         Serial.println("[DEVICE] CanManager setup failed!");
     }
 
-    // Create and setup VehicleManager
-    vehicleManager = new VehicleManager(canManager);
+    // Setup VehicleManager (already created earlier with canManager)
     if (!vehicleManager->setup())
     {
         Serial.println("[DEVICE] VehicleManager setup failed!");

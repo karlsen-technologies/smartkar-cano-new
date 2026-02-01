@@ -194,11 +194,13 @@ bool ClimateManager::startClimate(int commandId, float tempCelsius, bool allowBa
     pendingTempCelsius = tempCelsius;
     pendingAllowBattery = allowBattery;
     
+    // Ensure vehicle is awake and keep-alive is active
+    wakeController->ensureAwake();
+    
     // Start state machine
     if (!wakeController->isAwake()) {
         Serial.println("[ClimateManager] Vehicle not awake, requesting wake");
         setCommandState(CommandState::REQUESTING_WAKE);
-        wakeController->requestWake();
     } else if (needsProfileUpdate(tempCelsius, allowBattery)) {
         Serial.println("[ClimateManager] Profile needs update");
         setCommandState(CommandState::UPDATING_PROFILE);
@@ -223,11 +225,13 @@ bool ClimateManager::stopClimate(int commandId) {
     pendingCmdType = PendingCommandType::STOP_CLIMATE;
     pendingCommandId = commandId;
     
+    // Ensure vehicle is awake and keep-alive is active
+    wakeController->ensureAwake();
+    
     // Stop doesn't need profile update, just execute
     if (!wakeController->isAwake()) {
         Serial.println("[ClimateManager] Vehicle not awake, requesting wake");
         setCommandState(CommandState::REQUESTING_WAKE);
-        wakeController->requestWake();
     } else {
         Serial.println("[ClimateManager] Stopping profile 0");
         setCommandState(CommandState::EXECUTING_COMMAND);
@@ -395,6 +399,9 @@ bool ClimateManager::needsProfileUpdate(float tempCelsius, bool allowBattery) {
 void ClimateManager::completeCommand() {
     Serial.printf("[ClimateManager] Command %d completed successfully\r\n", pendingCommandId);
     
+    // Stop keep-alive - climate will keep vehicle awake if active
+    wakeController->stopKeepAlive();
+    
     // Reset state
     setCommandState(CommandState::IDLE);
     pendingCmdType = PendingCommandType::NONE;
@@ -405,6 +412,9 @@ void ClimateManager::completeCommand() {
 
 void ClimateManager::failCommand(const char* reason) {
     Serial.printf("[ClimateManager] Command %d failed: %s\r\n", pendingCommandId, reason);
+    
+    // Stop keep-alive - no need to keep vehicle awake
+    wakeController->stopKeepAlive();
     
     // Reset state
     setCommandState(CommandState::FAILED);

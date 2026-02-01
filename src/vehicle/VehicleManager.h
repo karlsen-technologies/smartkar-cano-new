@@ -167,11 +167,34 @@ public:
     
     /**
      * Request vehicle wake (non-blocking).
+     * DEPRECATED: Use ensureAwake() instead for proper keep-alive management.
      * Sets WAKE_REQUESTED state. State machine in loop() will handle wake sequence.
      * @return true if wake requested, false if already waking/awake
      */
     bool requestWake() {
-        return wakeController.requestWake();
+        // Forward to ensureAwake() for consistent behavior
+        wakeController.ensureAwake();
+        return wakeController.isAwake() || 
+               wakeController.getState() == WakeController::WakeState::WAKING ||
+               wakeController.getState() == WakeController::WakeState::WAKE_REQUESTED;
+    }
+    
+    /**
+     * Ensure vehicle is awake with keep-alive active.
+     * Call this before performing operations that require the vehicle to stay awake.
+     * After calling, check isAwake() to determine if you need to wait for wake completion.
+     */
+    void ensureAwake() {
+        wakeController.ensureAwake();
+    }
+    
+    /**
+     * Stop keep-alive heartbeat.
+     * Call this when an operation completes (successfully or not) and the 
+     * vehicle no longer needs to be kept awake artificially.
+     */
+    void stopKeepAlive() {
+        wakeController.stopKeepAlive();
     }
     
     /**
