@@ -1,7 +1,7 @@
 #include "SystemHandler.h"
 #include "../core/DeviceController.h"
 #include "../core/CommandRouter.h"
-#include "../modules/LinkManager.h"
+#include "../modules/MqttManager.h"
 
 // Static action list
 const char* SystemHandler::supportedActions[] = {
@@ -100,13 +100,13 @@ CommandResult SystemHandler::handleTelemetry(CommandContext& ctx) {
         return CommandResult::error("DeviceController not available");
     }
     
-    LinkManager* linkManager = deviceController->getLinkManager();
-    if (!linkManager) {
-        return CommandResult::error("LinkManager not available");
+    MqttManager* mqttManager = deviceController->getMqttManager();
+    if (!mqttManager) {
+        return CommandResult::error("MqttManager not available");
     }
     
     // Force immediate telemetry send (include all data, not just changed)
-    bool sent = linkManager->sendTelemetryNow(false);
+    bool sent = mqttManager->sendTelemetryNow(false);
     
     if (sent) {
         return CommandResult::ok("Telemetry sent");

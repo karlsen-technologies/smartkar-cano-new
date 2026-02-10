@@ -6,7 +6,7 @@
 // Forward declarations
 class PowerManager;
 class ModemManager;
-class LinkManager;
+class MqttManager;
 class CanManager;
 class VehicleManager;
 class CommandRouter;
@@ -102,7 +102,7 @@ public:
      */
     PowerManager* getPowerManager() { return powerManager; }
     ModemManager* getModemManager() { return modemManager; }
-    LinkManager* getLinkManager() { return linkManager; }
+    MqttManager* getMqttManager() { return mqttManager; }
     CanManager* getCanManager() { return canManager; }
     VehicleManager* getVehicleManager() { return vehicleManager; }
     CommandRouter* getCommandRouter() { return commandRouter; }
@@ -117,7 +117,7 @@ private:
     // Modules
     PowerManager* powerManager = nullptr;
     ModemManager* modemManager = nullptr;
-    LinkManager* linkManager = nullptr;
+    MqttManager* mqttManager = nullptr;
     CanManager* canManager = nullptr;
     VehicleManager* vehicleManager = nullptr;
     

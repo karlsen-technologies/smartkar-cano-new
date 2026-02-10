@@ -5,7 +5,7 @@
 #include "../modules/ModemManager.h"
 
 // Forward declarations
-class LinkManager;
+class MqttManager;
 
 /**
  * NetworkProvider - Reports network status telemetry
@@ -14,19 +14,19 @@ class LinkManager;
  * - Modem state (off, searching, connected, etc.)
  * - Network registration status
  * - Signal strength (RSSI in dBm)
- * - Link state (disconnected, connected, etc.)
+ * - MQTT state (disconnected, connected, etc.)
  * - SIM CCID
  * 
  * Sends on:
  * - Device wake (initial report)
- * - State changes (modem state, link state)
+ * - State changes (modem state, MQTT state)
  * - Significant signal changes (>10 dBm)
  * 
- * Note: Interval-based sending is controlled by LinkManager, not this provider.
+ * Note: Interval-based sending is controlled by MqttManager, not this provider.
  */
 class NetworkProvider : public ITelemetryProvider {
 public:
-    NetworkProvider(ModemManager* modemManager, LinkManager* linkManager);
+    NetworkProvider(ModemManager* modemManager, MqttManager* mqttManager);
     
     // ITelemetryProvider interface
     const char* getTelemetryDomain() override { return "network"; }
@@ -42,7 +42,7 @@ public:
 
 private:
     ModemManager* modemManager = nullptr;
-    LinkManager* linkManager = nullptr;
+    MqttManager* mqttManager = nullptr;
     
     // Change tracking
     bool initialReport = true;
@@ -51,7 +51,7 @@ private:
     // Last reported values for change detection
     ModemState lastModemState = ModemState::OFF;
     int16_t lastSignalStrength = 0;
-    bool lastLinkConnected = false;
+    bool lastMqttConnected = false;
     
     // Change threshold for signal strength (dBm)
     static const int16_t SIGNAL_CHANGE_THRESHOLD = 10;

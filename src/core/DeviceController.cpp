@@ -2,7 +2,7 @@
 #include "CommandRouter.h"
 #include "../modules/PowerManager.h"
 #include "../modules/ModemManager.h"
-#include "../modules/LinkManager.h"
+#include "../modules/MqttManager.h"
 #include "../modules/CanManager.h"
 #include "../vehicle/VehicleManager.h"
 #include "../providers/DeviceProvider.h"
@@ -68,7 +68,7 @@ void DeviceController::initModules()
 {
     Serial.println("[DEVICE] Initializing modules...");
 
-    // Create command router first (used by LinkManager)
+    // Create command router first (used by MqttManager)
     commandRouter = new CommandRouter();
 
     // Create modules in dependency order
@@ -76,17 +76,17 @@ void DeviceController::initModules()
     modemManager = new ModemManager(powerManager);
     canManager = new CanManager();
     
-    // Create vehicle manager (depends on canManager, used by LinkManager for telemetry intervals)
+    // Create vehicle manager (depends on canManager, used by MqttManager for telemetry intervals)
     vehicleManager = new VehicleManager(canManager);
     
-    // Create LinkManager (depends on modemManager, commandRouter, vehicleManager)
-    linkManager = new LinkManager(modemManager, commandRouter, vehicleManager);
+    // Create MqttManager (depends on modemManager, commandRouter, vehicleManager)
+    mqttManager = new MqttManager(modemManager, commandRouter, vehicleManager);
 
     // Set activity callbacks on all modules
     ActivityCallback activityCb = getActivityCallback();
     powerManager->setActivityCallback(activityCb);
     modemManager->setActivityCallback(activityCb);
-    linkManager->setActivityCallback(activityCb);
+    mqttManager->setActivityCallback(activityCb);
     canManager->setActivityCallback(activityCb); // Re-enabled - we check vehicle state separately now
 
     // Set low battery callback
@@ -130,9 +130,9 @@ void DeviceController::initModules()
             Serial.println("[DEVICE] ModemManager setup failed!");
         }
 
-        if (!linkManager->setup())
+        if (!mqttManager->setup())
         {
-            Serial.println("[DEVICE] LinkManager setup failed!");
+            Serial.println("[DEVICE] MqttManager setup failed!");
         }
 
         // Start the modem (unless it's already running from hotstart)
@@ -173,7 +173,7 @@ void DeviceController::initProvidersAndHandlers()
     deviceProvider = new DeviceProvider(powerManager);
     deviceProvider->setWakeCause(wakeCauseString);
 
-    networkProvider = new NetworkProvider(modemManager, linkManager);
+    networkProvider = new NetworkProvider(modemManager, mqttManager);
 
     vehicleProvider = new VehicleProvider(vehicleManager);
     vehicleProvider->setCommandRouter(commandRouter); // Enable event emission
@@ -225,7 +225,7 @@ void DeviceController::loopModules()
     // Loop in dependency order
     powerManager->loop();
     modemManager->loop();
-    linkManager->loop();
+    mqttManager->loop();
     canManager->loop();
     vehicleManager->loop();
 
@@ -295,7 +295,7 @@ bool DeviceController::canSleep()
         return false;
     }
 
-    if (linkManager->isBusy())
+    if (mqttManager->isBusy())
     {
         return false;
     }
@@ -312,7 +312,7 @@ void DeviceController::prepareForSleep()
 {
     // Prepare modules in reverse dependency order
     canManager->prepareForSleep();
-    linkManager->prepareForSleep();
+    mqttManager->prepareForSleep();
     modemManager->prepareForSleep();
     powerManager->prepareForSleep();
 }
@@ -404,9 +404,9 @@ void DeviceController::handleLowPowerModeWake()
         {
             Serial.println("[DEVICE] ModemManager setup failed!");
         }
-        if (!linkManager->setup())
+        if (!mqttManager->setup())
         {
-            Serial.println("[DEVICE] LinkManager setup failed!");
+            Serial.println("[DEVICE] MqttManager setup failed!");
         }
         if (!modemManager->isReady() && !modemManager->isBusy())
         {
@@ -447,7 +447,7 @@ void DeviceController::handleLowBattery(uint8_t level)
         }
 
         // Disconnect from server gracefully
-        linkManager->prepareForSleep();
+        mqttManager->prepareForSleep();
 
         // Disable the modem to save power
         Serial.println("[DEVICE] Disabling modem to conserve power");

@@ -1,6 +1,5 @@
 #include "ModemManager.h"
 #include "PowerManager.h"
-#include "LinkManager.h"
 #include "MqttManager.h"
 #include "../util.h"
 
@@ -673,12 +672,8 @@ void ModemManager::handleInterrupt()
         // This processes +CADATAIND, +CASTATE, +CARECV, time updates, etc.
         // handleURCs() will set got_data=true and sock_connected as needed
         modem->maintain();
-
-        // Notify LinkManager to check for data/connection changes
-        if (LinkManager::instance())
-        {
-            LinkManager::instance()->handleTCPInterrupt();
-        }
+    }
+}
     }
 }
     else

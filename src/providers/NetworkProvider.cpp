@@ -1,8 +1,8 @@
 #include "NetworkProvider.h"
-#include "../modules/LinkManager.h"
+#include "../modules/MqttManager.h"
 
-NetworkProvider::NetworkProvider(ModemManager* modemManager, LinkManager* linkManager)
-    : modemManager(modemManager), linkManager(linkManager) {
+NetworkProvider::NetworkProvider(ModemManager* modemManager, MqttManager* mqttManager)
+    : modemManager(modemManager), mqttManager(mqttManager) {
 }
 
 void NetworkProvider::getTelemetry(JsonObject& data) {
@@ -13,21 +13,21 @@ void NetworkProvider::getTelemetry(JsonObject& data) {
         data["modemConnected"] = modemManager->isConnected();
     }
     
-    if (linkManager) {
-        data["linkConnected"] = linkManager->isConnected();
+    if (mqttManager) {
+        data["mqttConnected"] = mqttManager->isConnected();
         
-        // Map link state to string
-        const char* linkStateStr;
-        switch (linkManager->getState()) {
-            case LinkState::DISCONNECTED:   linkStateStr = "disconnected"; break;
-            case LinkState::CONNECTING:     linkStateStr = "connecting"; break;
-            case LinkState::AUTHENTICATING: linkStateStr = "authenticating"; break;
-            case LinkState::CONNECTED:      linkStateStr = "connected"; break;
-            case LinkState::REJECTED:       linkStateStr = "rejected"; break;
-            case LinkState::LINK_ERROR:     linkStateStr = "error"; break;
-            default:                        linkStateStr = "unknown"; break;
+        // Map MQTT state to string
+        const char* mqttStateStr;
+        switch (mqttManager->getState()) {
+            case MqttState::DISCONNECTED:   mqttStateStr = "disconnected"; break;
+            case MqttState::CONFIGURING:    mqttStateStr = "configuring"; break;
+            case MqttState::CONNECTING:     mqttStateStr = "connecting"; break;
+            case MqttState::SUBSCRIBING:    mqttStateStr = "subscribing"; break;
+            case MqttState::CONNECTED:      mqttStateStr = "connected"; break;
+            case MqttState::MQTT_ERROR:     mqttStateStr = "error"; break;
+            default:                        mqttStateStr = "unknown"; break;
         }
-        data["linkState"] = linkStateStr;
+        data["mqttState"] = mqttStateStr;
     }
 }
 
@@ -40,9 +40,9 @@ TelemetryPriority NetworkProvider::getPriority() {
         }
     }
     
-    if (linkManager) {
-        bool currentConnected = linkManager->isConnected();
-        if (currentConnected != lastLinkConnected) {
+    if (mqttManager) {
+        bool currentConnected = mqttManager->isConnected();
+        if (currentConnected != lastMqttConnected) {
             return TelemetryPriority::PRIORITY_HIGH;
         }
     }
@@ -75,10 +75,10 @@ bool NetworkProvider::hasChanged() {
         }
     }
     
-    // Check for link state change
-    if (linkManager) {
-        bool currentConnected = linkManager->isConnected();
-        if (currentConnected != lastLinkConnected) {
+    // Check for MQTT state change
+    if (mqttManager) {
+        bool currentConnected = mqttManager->isConnected();
+        if (currentConnected != lastMqttConnected) {
             return true;
         }
     }
@@ -96,8 +96,8 @@ void NetworkProvider::onTelemetrySent() {
         lastSignalStrength = modemManager->getSignalQuality();
     }
     
-    if (linkManager) {
-        lastLinkConnected = linkManager->isConnected();
+    if (mqttManager) {
+        lastMqttConnected = mqttManager->isConnected();
     }
 }
 
