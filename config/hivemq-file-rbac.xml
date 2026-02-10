@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+    SmartKar-Cano HiveMQ RBAC Configuration
+    
+    Roles:
+    - device: SmartKar-Cano ESP32 devices (shared credentials, isolated by clientId)
+    - server: Backend server for sending commands and receiving telemetry
+    - admin:  Full access for debugging and management
+    
+    Topic Structure:
+    - smartkar/{ccid}/state      Device -> Server (telemetry)
+    - smartkar/{ccid}/response   Device -> Server (command responses)
+    - smartkar/{ccid}/event      Device -> Server (events)
+    - smartkar/{ccid}/status     Device -> Server (LWT and online status)
+    - smartkar/{ccid}/command    Server -> Device (commands)
+    
+    Device Authentication:
+    - Devices use shared credentials (username: "device", password: configured below)
+    - Each device sets its MQTT clientId to its CCID (SIM card identifier)
+    - Topic permissions use ${{clientid}} to isolate devices to their own topics
+    
+    Password Generation:
+    Use HiveMQ password tool to generate hashes:
+    $ java -jar hivemq-file-rbac-extension-<version>.jar -p <password>
+    
+    IMPORTANT: Replace placeholder password hashes before deploying!
+-->
+<file-rbac>
+    <users>
+        <!-- 
+            Shared device account
+            All SmartKar-Cano devices use this account.
+            Devices set clientId to their CCID for topic isolation.
+            
+            TODO: Replace password hash with your own using HiveMQ password tool
+            Example: java -jar hivemq-file-rbac-extension-*.jar -p "your-secure-device-password"
+        -->
+        <user>
+            <name>device</name>
+            <!-- PLACEHOLDER: Replace with actual password hash -->
+            <password>REPLACE_WITH_GENERATED_HASH</password>
+            <roles>
+                <id>device</id>
+            </roles>
+        </user>
+
+        <!-- 
+            Server account
+            Backend server uses this account to send commands and receive telemetry.
+            
+            TODO: Replace password hash with your own
+        -->
+        <user>
+            <name>server</name>
+            <!-- PLACEHOLDER: Replace with actual password hash -->
+            <password>REPLACE_WITH_GENERATED_HASH</password>
+            <roles>
+                <id>server</id>
+            </roles>
+        </user>
+
+        <!-- 
+            Admin account
+            Full access for debugging, monitoring, and management.
+            
+            TODO: Replace password hash with your own
+        -->
+        <user>
+            <name>admin</name>
+            <!-- PLACEHOLDER: Replace with actual password hash -->
+            <password>REPLACE_WITH_GENERATED_HASH</password>
+            <roles>
+                <id>admin</id>
+            </roles>
+        </user>
+    </users>
+
+    <roles>
+        <!--
+            Device Role
+            
+            Devices can:
+            - PUBLISH to their own state, response, event, and status topics
+            - SUBSCRIBE to their own command topic
+            
+            Topic isolation enforced via ${{clientid}} substitution.
+            Device must set clientId to its CCID when connecting.
+        -->
+        <role>
+            <id>device</id>
+            <permissions>
+                <!-- PUBLISH telemetry/state updates -->
+                <permission>
+                    <topic>smartkar/${{clientid}}/state</topic>
+                    <activity>PUBLISH</activity>
+                </permission>
+
+                <!-- PUBLISH command responses -->
+                <permission>
+                    <topic>smartkar/${{clientid}}/response</topic>
+                    <activity>PUBLISH</activity>
+                </permission>
+
+                <!-- PUBLISH events (charging started, door opened, etc.) -->
+                <permission>
+                    <topic>smartkar/${{clientid}}/event</topic>
+                    <activity>PUBLISH</activity>
+                </permission>
+
+                <!-- PUBLISH status (online/offline, LWT) - retained for last known state -->
+                <permission>
+                    <topic>smartkar/${{clientid}}/status</topic>
+                    <activity>PUBLISH</activity>
+                    <retain>ALL</retain>
+                </permission>
+
+                <!-- SUBSCRIBE to receive commands from server -->
+                <permission>
+                    <topic>smartkar/${{clientid}}/command</topic>
+                    <activity>SUBSCRIBE</activity>
+                </permission>
+            </permissions>
+        </role>
+
+        <!--
+            Server Role
+            
+            Server can:
+            - SUBSCRIBE to all device topics (state, response, event, status)
+            - PUBLISH commands to any device
+            
+            Uses + wildcard to match any device CCID.
+        -->
+        <role>
+            <id>server</id>
+            <permissions>
+                <!-- SUBSCRIBE to all device telemetry -->
+                <permission>
+                    <topic>smartkar/+/state</topic>
+                    <activity>SUBSCRIBE</activity>
+                </permission>
+
+                <!-- SUBSCRIBE to all device responses -->
+                <permission>
+                    <topic>smartkar/+/response</topic>
+                    <activity>SUBSCRIBE</activity>
+                </permission>
+
+                <!-- SUBSCRIBE to all device events -->
+                <permission>
+                    <topic>smartkar/+/event</topic>
+                    <activity>SUBSCRIBE</activity>
+                </permission>
+
+                <!-- SUBSCRIBE to all device status (online/offline) -->
+                <permission>
+                    <topic>smartkar/+/status</topic>
+                    <activity>SUBSCRIBE</activity>
+                </permission>
+
+                <!-- PUBLISH commands to any device -->
+                <permission>
+                    <topic>smartkar/+/command</topic>
+                    <activity>PUBLISH</activity>
+                </permission>
+
+                <!-- Alternative: Subscribe to all smartkar topics with single wildcard -->
+                <!-- Uncomment if you prefer a simpler rule -->
+                <!--
+                <permission>
+                    <topic>smartkar/#</topic>
+                    <activity>SUBSCRIBE</activity>
+                </permission>
+                -->
+            </permissions>
+        </role>
+
+        <!--
+            Admin Role
+            
+            Full access to all topics for debugging and management.
+            Use with caution in production.
+        -->
+        <role>
+            <id>admin</id>
+            <permissions>
+                <permission>
+                    <topic>#</topic>
+                </permission>
+            </permissions>
+        </role>
+    </roles>
+</file-rbac>
