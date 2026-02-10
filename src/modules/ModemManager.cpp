@@ -1,6 +1,7 @@
 #include "ModemManager.h"
 #include "PowerManager.h"
 #include "LinkManager.h"
+#include "MqttManager.h"
 #include "../util.h"
 
 #include <Arduino.h>
@@ -574,7 +575,7 @@ void ModemManager::handleInterrupt()
 
     // Check for URCs we need to handle ourselves (not handled by TinyGSM)
     // TinyGSM's handleURCs() handles: +CADATAIND, +CASTATE, +CARECV, time updates, etc.
-    int urc = modem->waitResponse(100L, "+APP", "+CMT:");
+    int urc = modem->waitResponse(100L, "+APP", "+CMT:", "+SMSUB:", "+SMSTATE:");
 
     if (urc == 1)
     {
@@ -617,6 +618,69 @@ void ModemManager::handleInterrupt()
         if (activityCallback)
             activityCallback();
     }
+    else if (urc == 3)
+    {
+        // +SMSUB: "<topic>","<payload>" - MQTT message received
+        String line;
+        modem->waitResponse(100, line, "\r\n");
+        line.trim();
+
+        Serial.println("[MODEM] MQTT message received:");
+        Serial.println(line);
+
+        // Parse +SMSUB: "<topic>","<payload>"
+        // Format: +SMSUB: "topic","payload"
+        int firstQuote = line.indexOf('"');
+        int secondQuote = line.indexOf('"', firstQuote + 1);
+        int thirdQuote = line.indexOf('"', secondQuote + 1);
+        int fourthQuote = line.indexOf('"', thirdQuote + 1);
+
+        if (firstQuote != -1 && secondQuote != -1 && thirdQuote != -1 && fourthQuote != -1)
+        {
+            String topic = line.substring(firstQuote + 1, secondQuote);
+            String payload = line.substring(thirdQuote + 1, fourthQuote);
+
+            // Forward to MqttManager
+            if (MqttManager::instance())
+            {
+                MqttManager::instance()->handleMessage(topic, payload);
+            }
+        }
+        else
+        {
+            Serial.println("[MODEM] ERROR: Failed to parse MQTT message");
+        }
+
+        if (activityCallback)
+            activityCallback();
+    }
+    else if (urc == 4)
+    {
+        // +SMSTATE: <state> - MQTT connection state changed
+        String line;
+        modem->waitResponse(100, line, "\r\n");
+        line.trim();
+
+        Serial.print("[MODEM] MQTT state changed: ");
+        Serial.println(line);
+
+        if (activityCallback)
+            activityCallback();
+    }
+    else
+    {
+        // No match for +APP, +CMT, +SMSUB, or +SMSTATE - let TinyGSM handle it via maintain()
+        // This processes +CADATAIND, +CASTATE, +CARECV, time updates, etc.
+        // handleURCs() will set got_data=true and sock_connected as needed
+        modem->maintain();
+
+        // Notify LinkManager to check for data/connection changes
+        if (LinkManager::instance())
+        {
+            LinkManager::instance()->handleTCPInterrupt();
+        }
+    }
+}
     else
     {
         // No match for +APP or +CMT - let TinyGSM handle it via maintain()
