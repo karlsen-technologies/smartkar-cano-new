@@ -74,11 +74,12 @@ void VehicleManager::loop()
     profileManager.loop();
 
     // Periodic statistics logging (from main loop on Core 1)
-    if (millis() - lastLogTime > LOG_INTERVAL)
-    {
-        logStatistics();
-        lastLogTime = millis();
-    }
+    // Disabled for now to reduce serial output during MQTT testing
+    // if (millis() - lastLogTime > LOG_INTERVAL)
+    // {
+    //     logStatistics();
+    //     lastLogTime = millis();
+    // }
 }
 
 // =============================================================================

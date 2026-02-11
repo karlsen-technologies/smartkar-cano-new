@@ -8,11 +8,12 @@
     - admin:  Full access for debugging and management
     
     Topic Structure:
-    - smartkar/{ccid}/state      Device -> Server (telemetry)
-    - smartkar/{ccid}/response   Device -> Server (command responses)
-    - smartkar/{ccid}/event      Device -> Server (events)
-    - smartkar/{ccid}/status     Device -> Server (LWT and online status)
-    - smartkar/{ccid}/command    Server -> Device (commands)
+    - smartkar/{ccid}/state/{domain}  Device -> Server (telemetry per domain)
+                                      Domains: device, network, battery, drive, body, climate, range, gps, plug
+    - smartkar/{ccid}/response        Device -> Server (command responses)
+    - smartkar/{ccid}/event           Device -> Server (events)
+    - smartkar/{ccid}/status          Device -> Server (LWT and online status)
+    - smartkar/{ccid}/command         Server -> Device (commands)
     
     Device Authentication:
     - Devices use shared credentials (username: "device", password: configured below)
@@ -80,7 +81,8 @@
             Device Role
             
             Devices can:
-            - PUBLISH to their own state, response, event, and status topics
+            - PUBLISH to their own state sub-topics (state/device, state/battery, etc.)
+            - PUBLISH to their own response, event, and status topics
             - SUBSCRIBE to their own command topic
             
             Topic isolation enforced via ${{clientid}} substitution.
@@ -89,9 +91,9 @@
         <role>
             <id>device</id>
             <permissions>
-                <!-- PUBLISH telemetry/state updates -->
+                <!-- PUBLISH telemetry/state updates (all domains) -->
                 <permission>
-                    <topic>smartkar/${{clientid}}/state</topic>
+                    <topic>smartkar/${{clientid}}/state/+</topic>
                     <activity>PUBLISH</activity>
                 </permission>
 
@@ -126,7 +128,8 @@
             Server Role
             
             Server can:
-            - SUBSCRIBE to all device topics (state, response, event, status)
+            - SUBSCRIBE to all device state sub-topics (state/{domain})
+            - SUBSCRIBE to all device topics (response, event, status)
             - PUBLISH commands to any device
             
             Uses + wildcard to match any device CCID.
@@ -134,9 +137,9 @@
         <role>
             <id>server</id>
             <permissions>
-                <!-- SUBSCRIBE to all device telemetry -->
+                <!-- SUBSCRIBE to all device telemetry (all domains) -->
                 <permission>
-                    <topic>smartkar/+/state</topic>
+                    <topic>smartkar/+/state/+</topic>
                     <activity>SUBSCRIBE</activity>
                 </permission>
 

@@ -12,11 +12,11 @@ class VehicleManager;
 /**
  * MQTT broker configuration
  */
-#define MQTT_BROKER_HOST "broker.smartkar.no"
+#define MQTT_BROKER_HOST "link.smartkar.no"
 #define MQTT_BROKER_PORT 1883
 #define MQTT_USERNAME "device"
-#define MQTT_PASSWORD "your-device-password"  // TODO: Replace with actual password
-#define MQTT_KEEPALIVE 60  // seconds
+#define MQTT_PASSWORD "_pxThY8DCH7yPTWG"
+#define MQTT_KEEPALIVE 300  // 5 minutes for power saving
 
 /**
  * MQTT connection state
@@ -121,11 +121,12 @@ public:
     void handleMessage(const String& topic, const String& payload);
 
     /**
-     * Send online status message.
+     * Send status message.
      * @param online true for online, false for offline
+     * @param sleeping true if sleeping, false if awake
      * @return true if sent successfully
      */
-    bool sendOnlineStatus(bool online);
+    bool sendStatus(bool online, bool sleeping);
 
     /**
      * Get the device's CCID for topic construction.
@@ -145,6 +146,7 @@ private:
 
     MqttState state = MqttState::DISCONNECTED;
     MqttState previousState = MqttState::DISCONNECTED;
+    bool adoptedConnection = false;  // Track if we've tried to adopt on this boot
 
     // Cached device CCID for topics
     String deviceCCID;
@@ -173,6 +175,7 @@ private:
     bool connectToBroker();
     bool subscribeToCommands();
     bool configureLWT();
+    bool tryAdoptConnection();  // Try to adopt existing MQTT connection on hotstart
 
     // AT command helpers
     bool sendATCommand(const String& cmd, const String& expectedResponse = "OK", uint32_t timeout = 5000);

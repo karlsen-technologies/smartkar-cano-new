@@ -8,7 +8,7 @@
 
 // Maximum number of handlers/providers that can be registered
 #define MAX_COMMAND_HANDLERS 8
-#define MAX_TELEMETRY_PROVIDERS 8
+#define MAX_TELEMETRY_PROVIDERS 12
 
 /**
  * Response sender callback type.
@@ -120,6 +120,21 @@ public:
      * @param details Optional event details
      */
     void sendEvent(const char* domain, const char* event, JsonObject* details = nullptr);
+    
+    /**
+     * Get number of registered telemetry providers.
+     * @return Provider count
+     */
+    size_t getProviderCount() const { return providerCount; }
+    
+    /**
+     * Get provider by index.
+     * @param index Provider index (0 to getProviderCount()-1)
+     * @return Provider pointer, or nullptr if index out of range
+     */
+    ITelemetryProvider* getProvider(size_t index) const {
+        return index < providerCount ? providers[index] : nullptr;
+    }
 
 private:
     ICommandHandler* handlers[MAX_COMMAND_HANDLERS];

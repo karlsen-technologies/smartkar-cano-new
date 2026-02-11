@@ -7,7 +7,13 @@
 #include "../vehicle/VehicleManager.h"
 #include "../providers/DeviceProvider.h"
 #include "../providers/NetworkProvider.h"
-#include "../providers/VehicleProvider.h"
+#include "../providers/BatteryProvider.h"
+#include "../providers/DriveProvider.h"
+#include "../providers/BodyProvider.h"
+#include "../providers/ClimateProvider.h"
+#include "../providers/RangeProvider.h"
+#include "../providers/GpsProvider.h"
+#include "../providers/PlugProvider.h"
 #include "../handlers/SystemHandler.h"
 #include "../handlers/VehicleHandler.h"
 #include "../handlers/ChargingProfileHandler.h"
@@ -175,8 +181,14 @@ void DeviceController::initProvidersAndHandlers()
 
     networkProvider = new NetworkProvider(modemManager, mqttManager);
 
-    vehicleProvider = new VehicleProvider(vehicleManager);
-    vehicleProvider->setCommandRouter(commandRouter); // Enable event emission
+    // Create vehicle domain providers (split from VehicleProvider)
+    batteryProvider = new BatteryProvider(vehicleManager);
+    driveProvider = new DriveProvider(vehicleManager);
+    bodyProvider = new BodyProvider(vehicleManager);
+    climateProvider = new ClimateProvider(vehicleManager);
+    rangeProvider = new RangeProvider(vehicleManager);
+    gpsProvider = new GpsProvider(vehicleManager);
+    plugProvider = new PlugProvider(vehicleManager);
 
     // Create command handlers
     systemHandler = new SystemHandler(this, commandRouter);
@@ -186,7 +198,13 @@ void DeviceController::initProvidersAndHandlers()
     // Register providers with CommandRouter
     commandRouter->registerProvider(deviceProvider);
     commandRouter->registerProvider(networkProvider);
-    commandRouter->registerProvider(vehicleProvider);
+    commandRouter->registerProvider(batteryProvider);
+    commandRouter->registerProvider(driveProvider);
+    commandRouter->registerProvider(bodyProvider);
+    commandRouter->registerProvider(climateProvider);
+    commandRouter->registerProvider(rangeProvider);
+    commandRouter->registerProvider(gpsProvider);
+    commandRouter->registerProvider(plugProvider);
 
     // Register handlers with CommandRouter
     commandRouter->registerHandler(systemHandler);
@@ -228,12 +246,6 @@ void DeviceController::loopModules()
     mqttManager->loop();
     canManager->loop();
     vehicleManager->loop();
-
-    // Check for vehicle state changes and emit events
-    if (vehicleProvider)
-    {
-        vehicleProvider->checkAndEmitEvents();
-    }
 }
 
 void DeviceController::reportActivity()

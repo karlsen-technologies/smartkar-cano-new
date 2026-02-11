@@ -1,4 +1,5 @@
 #include "MqttManager.h"
+#include "../core/CommandRouter.h"
 #include "../vehicle/VehicleManager.h"
 #include "../util.h"
 
@@ -51,13 +52,31 @@ void MqttManager::loop()
     switch (state)
     {
     case MqttState::DISCONNECTED:
+        // On hotstart, try to adopt existing connection first
+        if (!adoptedConnection && modemManager->wasHotstart())
+        {
+            Serial.println("[MQTT] Modem hotstart detected, checking for existing MQTT connection");
+            adoptedConnection = true;
+            
+            if (tryAdoptConnection())
+            {
+                Serial.println("[MQTT] Adopted existing MQTT connection!");
+                break;
+            }
+            Serial.println("[MQTT] No existing MQTT connection, will reconnect normally");
+        }
+        else if (!adoptedConnection)
+        {
+            adoptedConnection = true;
+        }
+        
         // Try to connect after delay
         if (millis() - lastConnectAttempt >= CONNECT_RETRY_DELAY)
         {
             lastConnectAttempt = millis();
             connectAttempts++;
 
-            Serial.printf("[MQTT] Connecting (attempt %d/%d)...\n", connectAttempts, MAX_CONNECT_ATTEMPTS);
+            Serial.printf("[MQTT] Connecting (attempt %d/%d)...\r\n", connectAttempts, MAX_CONNECT_ATTEMPTS);
             
             if (connect())
             {
@@ -130,13 +149,13 @@ void MqttManager::loop()
 
 void MqttManager::prepareForSleep()
 {
-    Serial.println("[MQTT] Preparing for sleep");
+    Serial.println("[MQTT] Preparing for sleep (keeping MQTT connection alive)");
     
-    // Send offline status (LWT will also trigger if connection drops)
-    sendOnlineStatus(false);
+    // Send sleeping status - we're still online, just sleeping
+    // The modem stays connected so it can receive messages and trigger RI pin to wake us
+    sendStatus(true, true);
     
-    // Disconnect cleanly
-    disconnect();
+    // DO NOT disconnect - modem needs to stay connected to receive wake commands
 }
 
 bool MqttManager::isBusy()
@@ -159,6 +178,16 @@ bool MqttManager::connect()
 {
     Serial.println("[MQTT] Starting connection sequence");
 
+    // First, ensure we're disconnected from any previous session
+    // This prevents "clientId already connected" errors
+    TinyGsmSim7080Extended* modem = modemManager->getModem();
+    if (modem)
+    {
+        Serial.println("[MQTT] Cleaning up any existing session...");
+        modem->sendAT("+SMDISC");
+        modem->waitResponse(2000); // Don't care if it fails - we might not be connected
+    }
+
     setState(MqttState::CONFIGURING);
 
     // Get device CCID for client ID
@@ -174,8 +203,8 @@ bool MqttManager::connect()
     stateTopicBase = "smartkar/" + deviceCCID + "/";
     commandTopic = stateTopicBase + "command";
 
-    Serial.printf("[MQTT] Device CCID: %s\n", deviceCCID.c_str());
-    Serial.printf("[MQTT] Command topic: %s\n", commandTopic.c_str());
+    Serial.printf("[MQTT] Device CCID: %s\r\n", deviceCCID.c_str());
+    Serial.printf("[MQTT] Command topic: %s\r\n", commandTopic.c_str());
 
     // Configure MQTT parameters
     if (!configureBroker())
@@ -210,8 +239,8 @@ bool MqttManager::connect()
     setState(MqttState::CONNECTED);
     Serial.println("[MQTT] Connected and subscribed successfully");
 
-    // Send online status
-    sendOnlineStatus(true);
+    // Send online and awake status
+    sendStatus(true, false);
 
     // Send initial telemetry
     lastTelemetryTime = millis();
@@ -343,7 +372,9 @@ bool MqttManager::configureLWT()
     }
 
     // Set LWT message (JSON with offline status)
-    String lwtMessage = "{\"online\":false,\"timestamp\":" + String(millis()) + "}";
+    // Escape inner quotes with backslash for AT command parser
+    // LWT fires on unexpected disconnect - device is offline and not sleeping (crashed/lost connection)
+    String lwtMessage = "{\\\"online\\\":false,\\\"sleeping\\\":false,\\\"timestamp\\\":" + String(millis()) + "}";
     String messageCmd = String("+SMCONF=\"MESSAGE\",\"") + lwtMessage + "\"";
     modem->sendAT(messageCmd.c_str());
     if (modem->waitResponse(5000) != 1)
@@ -384,14 +415,14 @@ bool MqttManager::connectToBroker()
     }
     else
     {
-        Serial.printf("[MQTT] Connection failed (result: %d)\n", result);
+        Serial.printf("[MQTT] Connection failed (result: %d)\r\n", result);
         return false;
     }
 }
 
 bool MqttManager::subscribeToCommands()
 {
-    Serial.printf("[MQTT] Subscribing to: %s\n", commandTopic.c_str());
+    Serial.printf("[MQTT] Subscribing to: %s\r\n", commandTopic.c_str());
 
     TinyGsmSim7080Extended* modem = modemManager->getModem();
     if (!modem)
@@ -399,7 +430,14 @@ bool MqttManager::subscribeToCommands()
         return false;
     }
 
-    // Subscribe with QoS 1
+    // First, unsubscribe in case we're already subscribed (persistent session with CLEANSS=0)
+    // This prevents "already subscribed" errors on reconnect
+    Serial.println("[MQTT] Unsubscribing first (in case already subscribed)...");
+    String unsubCmd = String("+SMUNSUB=\"") + commandTopic + "\"";
+    modem->sendAT(unsubCmd.c_str());
+    modem->waitResponse(2000); // Ignore result - it's OK if we weren't subscribed
+
+    // Now subscribe with QoS 1
     String subCmd = String("+SMSUB=\"") + commandTopic + "\",1";
     modem->sendAT(subCmd.c_str());
     
@@ -429,10 +467,38 @@ int MqttManager::checkMqttState()
     {
         String response = modem->stream.readStringUntil('\n');
         int state = response.toInt();
+        modem->waitResponse();  // Consume the trailing "OK" to prevent buffer pollution
         return state;
     }
 
     return 0;
+}
+
+bool MqttManager::tryAdoptConnection()
+{
+    Serial.println("[MQTT] Checking for existing MQTT connection...");
+    
+    int mqttState = checkMqttState();  // Uses AT+SMSTATE?
+    
+    if (mqttState > 0)  // 1 = connected, 2 = connected with session
+    {
+        Serial.printf("[MQTT] Hotstart: MQTT connection still active (state=%d)\r\n", mqttState);
+        
+        // Re-initialize internal state (lost during deep sleep)
+        deviceCCID = getDeviceCCID();
+        stateTopicBase = "smartkar/" + deviceCCID + "/";
+        commandTopic = stateTopicBase + "command";
+        
+        setState(MqttState::CONNECTED);
+        sendStatus(true, false);  // Awake status
+        lastTelemetryTime = millis();
+        sendTelemetryNow(false);
+        
+        return true;
+    }
+    
+    Serial.printf("[MQTT] MQTT not connected (state=%d), will reconnect\r\n", mqttState);
+    return false;
 }
 
 // ============================================================================
@@ -472,7 +538,7 @@ bool MqttManager::publishFull(const String& fullTopic, const String& payload, Mq
     // AT+SMPUB="<topic>",<length>,<qos>,<retain>
     String pubCmd = String("+SMPUB=\"") + fullTopic + "\"," + payloadLen + "," + qosInt + "," + retainInt;
     
-    Serial.printf("[MQTT] Publishing to %s (%d bytes, QoS %d)\n", fullTopic.c_str(), payloadLen, qosInt);
+    Serial.printf("[MQTT] Publishing to %s (%d bytes, QoS %d)\r\n", fullTopic.c_str(), payloadLen, qosInt);
 
     modem->sendAT(pubCmd.c_str());
     
@@ -497,10 +563,11 @@ bool MqttManager::publishFull(const String& fullTopic, const String& payload, Mq
     return true;
 }
 
-bool MqttManager::sendOnlineStatus(bool online)
+bool MqttManager::sendStatus(bool online, bool sleeping)
 {
     String statusTopic = stateTopicBase + "status";
     String payload = String("{\"online\":") + (online ? "true" : "false") + 
+                     ",\"sleeping\":" + (sleeping ? "true" : "false") +
                      ",\"timestamp\":" + millis() + "}";
     
     return publishFull(statusTopic, payload, MqttQoS::AT_LEAST_ONCE, true);
@@ -513,46 +580,63 @@ bool MqttManager::sendTelemetryNow(bool changedOnly)
         return false;
     }
 
-    if (!vehicleManager)
+    if (!commandRouter)
     {
+        Serial.println("[MQTT] No CommandRouter - cannot send telemetry");
         return false;
     }
 
     Serial.println("[MQTT] Sending telemetry");
 
-    // Build state message (similar to LinkManager's telemetry)
-    JsonDocument doc;
+    bool anyPublished = false;
     
-    // Device domain
-    JsonObject device = doc["device"].to<JsonObject>();
-    device["uptime"] = millis();
-    device["freeHeap"] = ESP.getFreeHeap();
-    device["wakeCause"] = "unknown"; // TODO: Get actual wake cause
+    // Iterate through all registered telemetry providers
+    for (size_t i = 0; i < commandRouter->getProviderCount(); i++)
+    {
+        ITelemetryProvider* provider = commandRouter->getProvider(i);
+        if (!provider)
+        {
+            continue;
+        }
 
-    // Network domain
-    JsonObject network = doc["network"].to<JsonObject>();
-    network["modemState"] = "connected"; // TODO: Get actual modem state string
-    network["signalStrength"] = modemManager->getSignalQuality();
-    network["simCCID"] = deviceCCID;
-    network["modemConnected"] = modemManager->isConnected();
-    network["mqttConnected"] = isConnected();
+        // Skip if changedOnly mode and provider hasn't changed
+        if (changedOnly && !provider->hasChanged())
+        {
+            continue;
+        }
 
-    // Vehicle domain (get from VehicleManager)
-    JsonObject vehicle = doc["vehicle"].to<JsonObject>();
-    // TODO: Add vehicle state from VehicleManager
+        // Build telemetry JSON for this provider
+        JsonDocument doc;
+        JsonObject data = doc.to<JsonObject>();
+        provider->getTelemetry(data);
 
-    // Serialize and publish
-    String payload;
-    serializeJson(doc, payload);
+        // Serialize to string
+        String payload;
+        serializeJson(doc, payload);
 
-    bool success = publish("state", payload, MqttQoS::AT_LEAST_ONCE, false);
-    
-    if (success)
+        // Build topic: state/{domain} (e.g., state/battery)
+        String topic = String("state/") + provider->getTelemetryDomain();
+
+        // Publish to MQTT
+        if (publish(topic, payload, MqttQoS::AT_LEAST_ONCE, false))
+        {
+            // Notify provider that telemetry was sent
+            provider->onTelemetrySent();
+            anyPublished = true;
+        }
+        else
+        {
+            Serial.printf("[MQTT] Failed to publish %s telemetry\r\n", provider->getTelemetryDomain());
+        }
+    }
+
+    // Update last telemetry time if any were published
+    if (anyPublished)
     {
         lastTelemetryTime = millis();
     }
 
-    return success;
+    return anyPublished;
 }
 
 // ============================================================================
@@ -561,7 +645,7 @@ bool MqttManager::sendTelemetryNow(bool changedOnly)
 
 void MqttManager::handleMessage(const String& topic, const String& payload)
 {
-    Serial.printf("[MQTT] Received message on %s: %s\n", topic.c_str(), payload.c_str());
+    Serial.printf("[MQTT] Received message on %s: %s\r\n", topic.c_str(), payload.c_str());
 
     // Report activity
     if (activityCallback)
@@ -578,14 +662,25 @@ void MqttManager::handleMessage(const String& topic, const String& payload)
 
         if (error)
         {
-            Serial.printf("[MQTT] ERROR: JSON parse error: %s\n", error.c_str());
+            Serial.printf("[MQTT] ERROR: JSON parse error: %s\r\n", error.c_str());
+            return;
+        }
+
+        // Extract command fields
+        String action = doc["action"] | "";
+        int id = doc["id"] | 0;
+        JsonObject params = doc["params"].as<JsonObject>();
+
+        if (action.length() == 0)
+        {
+            Serial.println("[MQTT] ERROR: Command missing 'action' field");
             return;
         }
 
         // Route to command router
         if (commandRouter)
         {
-            commandRouter->handleCommand(doc.as<JsonObject>());
+            commandRouter->handleCommand(action, id, params);
         }
     }
 }
@@ -663,7 +758,7 @@ void MqttManager::setState(MqttState newState)
         state = newState;
         stateEntryTime = millis();
 
-        Serial.printf("[MQTT] State: %d -> %d\n", (int)previousState, (int)state);
+        Serial.printf("[MQTT] State: %d -> %d\r\n", (int)previousState, (int)state);
     }
 }
 

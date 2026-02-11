@@ -277,6 +277,14 @@ void ModemManager::handleHotstartState()
     // Modem is already powered, check its state
     if (modem->testAT(500))
     {
+        // Cache CCID early while modem buffer is clean
+        // This prevents issues where later AT commands leave residual data that corrupts CCID reads
+        if (simCCID.length() == 0)
+        {
+            simCCID = modem->getSimCCID();
+            Serial.printf("[MODEM] Cached CCID on hotstart: %s\r\n", simCCID.c_str());
+        }
+        
         RegStatus regStatus = checkRegistration();
 
         if (regStatus == RegStatus::REGISTERED_HOME || regStatus == RegStatus::REGISTERED_ROAMING)
@@ -386,7 +394,7 @@ void ModemManager::handleRegisteredState()
 
     // Just entered registered state - configure eDRX and connect
     Serial.println("[MODEM] Configuring eDRX");
-    modem->sendAT("+CEDRXS=1,4,\"0001\"");
+    modem->sendAT("+CEDRXS=1,4,\"0011\"");  // 40.96s cycle for power saving
     if (modem->waitResponse() != 1)
     {
         Serial.println("[MODEM] eDRX config failed (non-fatal)");
@@ -533,9 +541,13 @@ RegStatus ModemManager::checkRegistration()
     // Parse: +CEREG: <n>,<stat>
     int commaIndex = data.indexOf(',');
     if (commaIndex < 0)
+    {
+        modem->waitResponse();  // Consume trailing "OK" even on parse failure
         return RegStatus::UNKNOWN;
+    }
 
     int status = data.substring(commaIndex + 1, data.indexOf(',', commaIndex + 1)).toInt();
+    modem->waitResponse();  // Consume the trailing "OK" to prevent buffer pollution
     return static_cast<RegStatus>(status);
 }
 
@@ -570,6 +582,8 @@ void ModemManager::handleInterrupt()
 {
     if (!hasInterrupt)
         return;
+    
+    Serial.println("[MODEM] RI interrupt triggered - checking URCs");
     hasInterrupt = false;
 
     // Check for URCs we need to handle ourselves (not handled by TinyGSM)
@@ -620,24 +634,65 @@ void ModemManager::handleInterrupt()
     else if (urc == 3)
     {
         // +SMSUB: "<topic>","<payload>" - MQTT message received
-        String line;
-        modem->waitResponse(100, line, "\r\n");
-        line.trim();
+        // Note: Payload can be multiline JSON, so we need to read until we find the closing quote
+        String fullMessage;
+        
+        // Read first line
+        modem->waitResponse(100, fullMessage, "\r\n");
+        
+        // Keep reading lines until we have the complete message with closing quote
+        // Format: +SMSUB: "topic","payload"
+        // We need to find: opening quote, closing quote (topic), opening quote, closing quote (payload)
+        int quoteCount = 0;
+        for (int i = 0; i < fullMessage.length(); i++)
+        {
+            if (fullMessage[i] == '"' && (i == 0 || fullMessage[i-1] != '\\'))
+            {
+                quoteCount++;
+            }
+        }
+        
+        // Keep reading lines until we have all 4 quotes
+        while (quoteCount < 4)
+        {
+            String nextLine;
+            if (modem->waitResponse(100, nextLine, "\r\n") == 1)
+            {
+                fullMessage += nextLine;
+                for (int i = 0; i < nextLine.length(); i++)
+                {
+                    if (nextLine[i] == '"' && (i == 0 || nextLine[i-1] != '\\'))
+                    {
+                        quoteCount++;
+                    }
+                }
+            }
+            else
+            {
+                break; // Timeout or no more data
+            }
+        }
 
-        Serial.println("[MODEM] MQTT message received:");
-        Serial.println(line);
+        Serial.print("[MODEM] MQTT message received:\r\n");
+        Serial.print(fullMessage);
+        Serial.print("\r\n");
 
         // Parse +SMSUB: "<topic>","<payload>"
         // Format: +SMSUB: "topic","payload"
-        int firstQuote = line.indexOf('"');
-        int secondQuote = line.indexOf('"', firstQuote + 1);
-        int thirdQuote = line.indexOf('"', secondQuote + 1);
-        int fourthQuote = line.indexOf('"', thirdQuote + 1);
+        int firstQuote = fullMessage.indexOf('"');
+        int secondQuote = fullMessage.indexOf('"', firstQuote + 1);
+        int thirdQuote = fullMessage.indexOf('"', secondQuote + 1);
+        int fourthQuote = fullMessage.lastIndexOf('"'); // Use lastIndexOf for the final quote
 
-        if (firstQuote != -1 && secondQuote != -1 && thirdQuote != -1 && fourthQuote != -1)
+        if (firstQuote != -1 && secondQuote != -1 && thirdQuote != -1 && fourthQuote != -1 && fourthQuote > thirdQuote)
         {
-            String topic = line.substring(firstQuote + 1, secondQuote);
-            String payload = line.substring(thirdQuote + 1, fourthQuote);
+            String topic = fullMessage.substring(firstQuote + 1, secondQuote);
+            String payload = fullMessage.substring(thirdQuote + 1, fourthQuote);
+            
+            // Remove any extra whitespace/newlines from payload
+            payload.trim();
+            payload.replace("\r", "");
+            payload.replace("\n", "");
 
             // Forward to MqttManager
             if (MqttManager::instance())
@@ -661,7 +716,8 @@ void ModemManager::handleInterrupt()
         line.trim();
 
         Serial.print("[MODEM] MQTT state changed: ");
-        Serial.println(line);
+        Serial.print(line);
+        Serial.print("\r\n");
 
         if (activityCallback)
             activityCallback();
@@ -672,23 +728,5 @@ void ModemManager::handleInterrupt()
         // This processes +CADATAIND, +CASTATE, +CARECV, time updates, etc.
         // handleURCs() will set got_data=true and sock_connected as needed
         modem->maintain();
-    }
-}
-    }
-}
-    else
-    {
-        // No match for +APP or +CMT - let TinyGSM handle it via maintain()
-        // This processes +CADATAIND, +CASTATE, +CARECV, time updates, etc.
-        // handleURCs() will set got_data=true and sock_connected as needed
-        modem->maintain();
-
-        // Notify LinkManager to check for data/connection changes
-        if (LinkManager::instance())
-        {
-            LinkManager::instance()->handleTCPInterrupt();
-        }
-        if (activityCallback)
-            activityCallback();
     }
 }

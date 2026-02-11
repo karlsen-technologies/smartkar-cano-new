@@ -12,7 +12,13 @@ class VehicleManager;
 class CommandRouter;
 class DeviceProvider;
 class NetworkProvider;
-class VehicleProvider;
+class BatteryProvider;
+class DriveProvider;
+class BodyProvider;
+class ClimateProvider;
+class RangeProvider;
+class GpsProvider;
+class PlugProvider;
 class SystemHandler;
 class VehicleHandler;
 class ChargingProfileHandler;
@@ -124,7 +130,13 @@ private:
     // Telemetry providers
     DeviceProvider* deviceProvider = nullptr;
     NetworkProvider* networkProvider = nullptr;
-    VehicleProvider* vehicleProvider = nullptr;
+    BatteryProvider* batteryProvider = nullptr;
+    DriveProvider* driveProvider = nullptr;
+    BodyProvider* bodyProvider = nullptr;
+    ClimateProvider* climateProvider = nullptr;
+    RangeProvider* rangeProvider = nullptr;
+    GpsProvider* gpsProvider = nullptr;
+    PlugProvider* plugProvider = nullptr;
     
     // Command handlers
     SystemHandler* systemHandler = nullptr;
