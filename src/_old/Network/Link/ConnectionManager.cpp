@@ -150,7 +150,7 @@ void ConnectionManager::loop() {
         // If we are not connected, try to connect
         if (this->state == LinkState::LINK_DISCONNECTED) {
             Serial.println("[CM] Connecting to server...");
-            if (this->client->connect("gallant.kartech.no", 4589)) {
+            if (this->client->connect("gallant.kartech.no", CONNECTION_SERVER_PORT)) {
                 Serial.println("[CM] Connected to server!");
                 this->state = LinkState::LINK_AUTHENTICATING;
 
@@ -162,6 +162,4 @@ void ConnectionManager::loop() {
             }
         }
     }
-
-    this->last_loop = millis();
 }

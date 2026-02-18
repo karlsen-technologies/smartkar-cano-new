@@ -1,0 +1,145 @@
+#include "SystemHandler.h"
+#include "../core/DeviceController.h"
+#include "../core/CommandRouter.h"
+#include "../modules/LinkManager.h"
+
+// Static action list
+const char* SystemHandler::supportedActions[] = {
+    "reboot",
+    "sleep",
+    "wakeup",
+    "telemetry",
+    "info"
+};
+const size_t SystemHandler::supportedActionCount = 5;
+
+SystemHandler::SystemHandler(DeviceController* deviceController, CommandRouter* commandRouter)
+    : deviceController(deviceController), commandRouter(commandRouter) {
+}
+
+CommandResult SystemHandler::handleCommand(CommandContext& ctx) {
+    Serial.printf("[SYSTEM] Command: %s\r\n", ctx.actionName.c_str());
+    
+    if (ctx.actionName == "reboot") {
+        return handleReboot(ctx);
+    }
+    else if (ctx.actionName == "sleep") {
+        return handleSleep(ctx);
+    }
+    else if (ctx.actionName == "wakeup") {
+        return handleWakeup(ctx);
+    }
+    else if (ctx.actionName == "telemetry") {
+        return handleTelemetry(ctx);
+    }
+    else if (ctx.actionName == "info") {
+        return handleInfo(ctx);
+    }
+    
+    return CommandResult::notSupported();
+}
+
+const char** SystemHandler::getSupportedActions(size_t& count) {
+    count = supportedActionCount;
+    return supportedActions;
+}
+
+CommandResult SystemHandler::handleReboot(CommandContext& ctx) {
+    Serial.println("[SYSTEM] Rebooting device...");
+    Serial.flush();
+    
+    // Small delay to allow response to be sent
+    delay(100);
+    
+    ESP.restart();
+    
+    // Won't reach here, but return OK anyway
+    return CommandResult::ok("Rebooting");
+}
+
+CommandResult SystemHandler::handleSleep(CommandContext& ctx) {
+    Serial.println("[SYSTEM] Sleep requested via command...");
+    
+    if (!deviceController) {
+        return CommandResult::error("DeviceController not available");
+    }
+    
+    // Extract optional duration parameter (in seconds)
+    // Default to 0 = wake on interrupt only
+    unsigned long durationSeconds = 0;
+    if (ctx.params["duration"].is<unsigned long>()) {
+        durationSeconds = ctx.params["duration"].as<unsigned long>();
+    }
+    
+    // Request sleep - it will happen on next loop iteration
+    // after the response is sent and modules are ready
+    deviceController->requestSleep(durationSeconds);
+    
+    CommandResult result = CommandResult::ok("Sleep requested");
+    result.data["duration"] = durationSeconds;
+    if (durationSeconds > 0) {
+        result.data["wakeMode"] = "timer_or_interrupt";
+    } else {
+        result.data["wakeMode"] = "interrupt_only";
+    }
+    return result;
+}
+
+CommandResult SystemHandler::handleWakeup(CommandContext& ctx) {
+    Serial.println("[SYSTEM] Wakeup acknowledged");
+    
+    CommandResult result = CommandResult::ok("Device is awake");
+    result.data["uptime"] = millis();
+    return result;
+}
+
+CommandResult SystemHandler::handleTelemetry(CommandContext& ctx) {
+    Serial.println("[SYSTEM] Forcing telemetry send...");
+    
+    if (!deviceController) {
+        return CommandResult::error("DeviceController not available");
+    }
+    
+    LinkManager* linkManager = deviceController->getLinkManager();
+    if (!linkManager) {
+        return CommandResult::error("LinkManager not available");
+    }
+    
+    // Force immediate telemetry send (include all data, not just changed)
+    bool sent = linkManager->sendTelemetryNow(false);
+    
+    if (sent) {
+        return CommandResult::ok("Telemetry sent");
+    } else {
+        return CommandResult::error("Failed to send telemetry");
+    }
+}
+
+CommandResult SystemHandler::handleInfo(CommandContext& ctx) {
+    Serial.println("[SYSTEM] Returning device info...");
+    
+    CommandResult result = CommandResult::ok();
+    
+    // Chip info
+    result.data["chipModel"] = ESP.getChipModel();
+    result.data["chipRevision"] = ESP.getChipRevision();
+    result.data["chipCores"] = ESP.getChipCores();
+    result.data["cpuFreqMHz"] = ESP.getCpuFreqMHz();
+    
+    // Memory
+    result.data["freeHeap"] = ESP.getFreeHeap();
+    result.data["minFreeHeap"] = ESP.getMinFreeHeap();
+    result.data["heapSize"] = ESP.getHeapSize();
+    
+    // Flash
+    result.data["flashSize"] = ESP.getFlashChipSize();
+    result.data["flashSpeed"] = ESP.getFlashChipSpeed();
+    
+    // SDK/firmware
+    result.data["sdkVersion"] = ESP.getSdkVersion();
+    
+    // Runtime
+    result.data["uptime"] = millis();
+    
+    return result;
+}
