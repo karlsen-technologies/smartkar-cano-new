@@ -5,4 +5,6 @@
 .vscode/ipch
 
 # Reverse engineering docs (local reference only)
-docs/canbus-reverse-engineering/
+docs/canbus-reverse-engineering/e-golf-comfort-can
+docs/canbus-reverse-engineering/vw-bap-analyser
+docs/canbus-reverse-engineering/workfiles

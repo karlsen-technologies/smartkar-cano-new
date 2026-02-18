@@ -201,7 +201,7 @@ CEREG status codes:
 
 ### Internet Connection (`MODEM_REGISTERED` state)
 
-1. Configure eDRX for power saving (`AT+CEDRXS=1,4,"0001"`)
+1. Configure eDRX for faster command response (`AT+CEDRXS=1,4,"0001","0001"` - 10.24s cycle, 2.56s PTW)
 2. Activate PDP context (`AT+CNACT=0,2`)
 3. Wait for `+APP ACTIVE` URC
 
