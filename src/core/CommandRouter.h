@@ -96,14 +96,6 @@ public:
     String collectTelemetry(bool onlyChanged = true);
     
     /**
-     * Check if any provider has high-priority data.
-     * Used to decide if telemetry should be sent immediately.
-     * 
-     * @return Highest priority level among providers with changed data
-     */
-    TelemetryPriority getHighestPriority();
-    
-    /**
      * Get list of all registered domains and their actions.
      * Used for capability discovery.
      * 

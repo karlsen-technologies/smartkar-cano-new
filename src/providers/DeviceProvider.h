@@ -29,7 +29,6 @@ public:
     // ITelemetryProvider interface
     const char* getTelemetryDomain() override { return "device"; }
     void getTelemetry(JsonObject& data) override;
-    TelemetryPriority getPriority() override;
     bool hasChanged() override;
     void onTelemetrySent() override;
     
@@ -50,6 +49,7 @@ private:
     // Change tracking
     bool initialReport = true;      // First report after boot
     bool changed = false;           // Explicit change flag
+    unsigned long lastSendTime = 0; // Last telemetry send time
     
     // Last reported values for change detection
     uint8_t lastBatteryPercent = 0;

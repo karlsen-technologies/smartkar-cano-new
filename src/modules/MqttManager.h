@@ -156,7 +156,6 @@ private:
     // Timing
     unsigned long stateEntryTime = 0;
     unsigned long lastLoopTime = 0;
-    unsigned long lastTelemetryTime = 0;
     unsigned long lastConnectionCheck = 0;
 
     // Reconnection
@@ -197,7 +196,5 @@ private:
     static const unsigned long CONNECT_RETRY_DELAY = 5000;          // 5 seconds between retries
     static const unsigned long CONFIG_TIMEOUT = 10000;              // 10 seconds for configuration
     static const unsigned long CONNECT_TIMEOUT = 30000;             // 30 seconds for connection
-    static const unsigned long TELEMETRY_INTERVAL_AWAKE = 30000;    // 30 seconds when vehicle awake
-    static const unsigned long TELEMETRY_INTERVAL_ASLEEP = 300000;  // 5 minutes when vehicle asleep
     static const int MAX_CONNECT_ATTEMPTS = 5;                      // Max retries before backoff
 };

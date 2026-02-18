@@ -394,7 +394,7 @@ void ModemManager::handleRegisteredState()
 
     // Just entered registered state - configure eDRX and connect
     Serial.println("[MODEM] Configuring eDRX");
-    modem->sendAT("+CEDRXS=1,4,\"0011\"");  // 40.96s cycle for power saving
+    modem->sendAT("+CEDRXS=1,4,\"0001\",\"0001\"");  // 10.24s cycle, 2.56s PTW for faster command response
     if (modem->waitResponse() != 1)
     {
         Serial.println("[MODEM] eDRX config failed (non-fatal)");

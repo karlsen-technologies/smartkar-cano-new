@@ -24,7 +24,6 @@ public:
     // ITelemetryProvider interface
     const char* getTelemetryDomain() override { return "plug"; }
     void getTelemetry(JsonObject& data) override;
-    TelemetryPriority getPriority() override;
     bool hasChanged() override;
     void onTelemetrySent() override;
     
@@ -34,4 +33,6 @@ private:
     // Change tracking
     bool initialReport = true;
     bool lastPlugged = false;
+    bool lastHasSupply = false;
+    unsigned long lastSendTime = 0;
 };

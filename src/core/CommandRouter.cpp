@@ -163,21 +163,6 @@ String CommandRouter::collectTelemetry(bool onlyChanged) {
     return output;
 }
 
-TelemetryPriority CommandRouter::getHighestPriority() {
-    TelemetryPriority highest = TelemetryPriority::PRIORITY_LOW;
-    
-    for (size_t i = 0; i < providerCount; i++) {
-        if (providers[i]->hasChanged()) {
-            TelemetryPriority p = providers[i]->getPriority();
-            if (p > highest) {
-                highest = p;
-            }
-        }
-    }
-    
-    return highest;
-}
-
 void CommandRouter::getCapabilities(JsonDocument& doc) {
     JsonObject domains = doc["domains"].to<JsonObject>();
     
@@ -292,6 +277,15 @@ void CommandRouter::sendResponse(int id, CommandStatus status, const char* messa
 }
 
 bool CommandRouter::handleSystemCommand(const String& action, int id, JsonObject& params) {
+    if (action == "wakeup") {
+        // Device is already awake - acknowledge the wakeup request
+        JsonDocument data;
+        data["awake"] = true;
+        data["uptime"] = millis();
+        sendResponse(id, CommandStatus::OK, "Already awake", &data);
+        return true;
+    }
+    
     if (action == "ping") {
         JsonDocument data;
         data["pong"] = true;

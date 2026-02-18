@@ -22,16 +22,26 @@ void GpsProvider::getTelemetry(JsonObject& data) {
     data["hdop"] = state.hdop;
 }
 
-TelemetryPriority GpsProvider::getPriority() {
-    return TelemetryPriority::PRIORITY_NORMAL;
+unsigned long GpsProvider::getMaxInterval() {
+    if (vehicleManager && vehicleManager->drive()->getState().ignitionOn) {
+        return 10000;  // 10 seconds when driving
+    }
+    return 300000;  // 5 minutes default
 }
 
 bool GpsProvider::hasChanged() {
     if (initialReport) return true;
-    // GPS changes when driving, let interval handle it
+    if (!vehicleManager) return false;
+    
+    // Check max interval (time-based only, no position delta)
+    if (millis() - lastSendTime >= getMaxInterval()) {
+        return true;
+    }
+    
     return false;
 }
 
 void GpsProvider::onTelemetrySent() {
     initialReport = false;
+    lastSendTime = millis();
 }

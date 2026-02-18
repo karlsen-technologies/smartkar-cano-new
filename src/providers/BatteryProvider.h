@@ -24,7 +24,7 @@ public:
     // ITelemetryProvider interface
     const char* getTelemetryDomain() override { return "battery"; }
     void getTelemetry(JsonObject& data) override;
-    TelemetryPriority getPriority() override;
+    unsigned long getMaxInterval() override;
     bool hasChanged() override;
     void onTelemetrySent() override;
     
@@ -33,6 +33,7 @@ private:
     
     // Change tracking
     bool initialReport = true;
+    unsigned long lastSendTime = 0;
     float lastSoc = 0.0f;
     float lastPowerKw = 0.0f;
     bool lastCharging = false;

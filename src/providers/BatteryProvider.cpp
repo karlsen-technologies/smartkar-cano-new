@@ -38,22 +38,21 @@ void BatteryProvider::getTelemetry(JsonObject& data) {
     data["balancing"] = state.balancingActive;
 }
 
-TelemetryPriority BatteryProvider::getPriority() {
-    if (!vehicleManager) return TelemetryPriority::PRIORITY_LOW;
-    
-    const BatteryManager::State& state = vehicleManager->battery()->getState();
-    
-    // High priority for charging state changes
-    if (state.charging != lastCharging) {
-        return TelemetryPriority::PRIORITY_HIGH;
+unsigned long BatteryProvider::getMaxInterval() {
+    if (vehicleManager && vehicleManager->battery()->getState().charging) {
+        return 30000;  // 30 sec when charging
     }
-    
-    return TelemetryPriority::PRIORITY_NORMAL;
+    return 300000;  // 5 min default
 }
 
 bool BatteryProvider::hasChanged() {
     if (initialReport) return true;
     if (!vehicleManager) return false;
+    
+    // Check if max interval exceeded
+    if (millis() - lastSendTime >= getMaxInterval()) {
+        return true;
+    }
     
     const BatteryManager::State& state = vehicleManager->battery()->getState();
     
@@ -71,6 +70,7 @@ bool BatteryProvider::hasChanged() {
 
 void BatteryProvider::onTelemetrySent() {
     initialReport = false;
+    lastSendTime = millis();
     if (!vehicleManager) return;
     
     const BatteryManager::State& state = vehicleManager->battery()->getState();

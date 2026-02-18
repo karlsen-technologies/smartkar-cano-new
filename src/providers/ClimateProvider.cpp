@@ -27,35 +27,39 @@ void ClimateProvider::getTelemetry(JsonObject& data) {
     data["remainingMin"] = state.climateTimeMin;  // BAP only
 }
 
-TelemetryPriority ClimateProvider::getPriority() {
-    if (!vehicleManager) return TelemetryPriority::PRIORITY_LOW;
-    
-    const ClimateManager::State& state = vehicleManager->climate()->getState();
-    
-    // High priority for climate state changes
-    if (state.climateActive != lastClimateActive) {
-        return TelemetryPriority::PRIORITY_HIGH;
+unsigned long ClimateProvider::getMaxInterval() {
+    if (vehicleManager && vehicleManager->climate()->getState().climateActive) {
+        return 30000;  // 30 seconds when climate is active
     }
-    
-    return TelemetryPriority::PRIORITY_NORMAL;
+    return 300000;  // 5 minutes default
 }
 
 bool ClimateProvider::hasChanged() {
     if (initialReport) return true;
     if (!vehicleManager) return false;
     
+    // Check max interval
+    if (millis() - lastSendTime >= getMaxInterval()) {
+        return true;
+    }
+    
     const ClimateManager::State& state = vehicleManager->climate()->getState();
     
     // Climate active state changed
     if (state.climateActive != lastClimateActive) return true;
+    
+    // Temperature changed significantly (≥2°C)
+    if (abs(state.insideTemp - lastInsideTemp) >= 2.0f) return true;
     
     return false;
 }
 
 void ClimateProvider::onTelemetrySent() {
     initialReport = false;
+    lastSendTime = millis();
     if (!vehicleManager) return;
     
     const ClimateManager::State& state = vehicleManager->climate()->getState();
     lastClimateActive = state.climateActive;
+    lastInsideTemp = state.insideTemp;
 }

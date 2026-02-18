@@ -82,7 +82,6 @@ void LinkManager::loop()
                     Serial.println("[LINK] Adopted existing TCP connection from modem!");
                     setState(LinkState::CONNECTED);
                     // Connection already authenticated before sleep, skip auth
-                    lastTelemetryTime = millis();
 
                     handleTCPInterrupt(); // Process any pending data
                 }
@@ -278,11 +277,6 @@ bool LinkManager::sendTelemetryNow(bool changedOnly)
 
     Serial.println("[LINK] Sending telemetry now");
     bool sent = send(telemetry);
-
-    if (sent)
-    {
-        lastTelemetryTime = millis();
-    }
 
     return sent;
 }
@@ -489,9 +483,6 @@ void LinkManager::handleAuthResponse(bool ok, const String &reason)
     {
         Serial.println("[LINK] Authentication accepted");
         setState(LinkState::CONNECTED);
-
-        // Reset telemetry timer - auth success implies device is awake
-        lastTelemetryTime = millis();
     }
     else
     {
@@ -507,30 +498,11 @@ void LinkManager::checkTelemetry()
     if (!commandRouter)
         return;
 
-    // Determine base interval based on vehicle state
-    bool vehicleAwake = vehicleManager && vehicleManager->isVehicleAwake();
-    unsigned long baseInterval = vehicleAwake ? TELEMETRY_INTERVAL_AWAKE : TELEMETRY_INTERVAL_ASLEEP;
-    
-    // Check priority to potentially override base interval
-    TelemetryPriority priority = commandRouter->getHighestPriority();
-
-    unsigned long interval = baseInterval;
-    if (priority >= TelemetryPriority::PRIORITY_HIGH)
+    // No global interval - just check each provider
+    // Providers manage their own intervals and change detection
+    String telemetry = commandRouter->collectTelemetry(true);
+    if (telemetry.length() > 0)
     {
-        interval = TELEMETRY_HIGH_INTERVAL; // 5s for urgent updates
-    }
-    else if (priority == TelemetryPriority::PRIORITY_REALTIME)
-    {
-        interval = 0; // Send immediately
-    }
-
-    if (millis_since(lastTelemetryTime) >= interval)
-    {
-        String telemetry = commandRouter->collectTelemetry(true);
-        if (telemetry.length() > 0)
-        {
-            send(telemetry);
-        }
-        lastTelemetryTime = millis();
+        send(telemetry);
     }
 }

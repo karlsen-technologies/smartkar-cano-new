@@ -19,35 +19,32 @@ void PlugProvider::getTelemetry(JsonObject& data) {
     data["lockState"] = battState.plugState.lockState;
 }
 
-TelemetryPriority PlugProvider::getPriority() {
-    if (!vehicleManager) return TelemetryPriority::PRIORITY_LOW;
-    
-    const BatteryManager::State& battState = vehicleManager->battery()->getState();
-    
-    // High priority for plug events
-    if (battState.plugState.isPlugged() != lastPlugged) {
-        return TelemetryPriority::PRIORITY_HIGH;
-    }
-    
-    return TelemetryPriority::PRIORITY_NORMAL;
-}
-
 bool PlugProvider::hasChanged() {
     if (initialReport) return true;
     if (!vehicleManager) return false;
+    
+    // Check max interval
+    if (millis() - lastSendTime >= getMaxInterval()) {
+        return true;
+    }
     
     const BatteryManager::State& battState = vehicleManager->battery()->getState();
     
     // Plug state changed
     if (battState.plugState.isPlugged() != lastPlugged) return true;
     
+    // Supply state changed
+    if (battState.plugState.hasSupply() != lastHasSupply) return true;
+    
     return false;
 }
 
 void PlugProvider::onTelemetrySent() {
     initialReport = false;
+    lastSendTime = millis();
     if (!vehicleManager) return;
     
     const BatteryManager::State& battState = vehicleManager->battery()->getState();
     lastPlugged = battState.plugState.isPlugged();
+    lastHasSupply = battState.plugState.hasSupply();
 }

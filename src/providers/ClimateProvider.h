@@ -25,7 +25,7 @@ public:
     // ITelemetryProvider interface
     const char* getTelemetryDomain() override { return "climate"; }
     void getTelemetry(JsonObject& data) override;
-    TelemetryPriority getPriority() override;
+    unsigned long getMaxInterval() override;
     bool hasChanged() override;
     void onTelemetrySent() override;
     
@@ -35,4 +35,6 @@ private:
     // Change tracking
     bool initialReport = true;
     bool lastClimateActive = false;
+    float lastInsideTemp = 0.0f;
+    unsigned long lastSendTime = 0;
 };

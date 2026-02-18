@@ -3,23 +3,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
-/**
- * Telemetry priority levels
- * 
- * Determines how urgently telemetry should be sent:
- * - PRIORITY_REALTIME: Send immediately (e.g., door opened, charge started)
- * - PRIORITY_HIGH: Send within seconds (e.g., battery level during charging)
- * - PRIORITY_NORMAL: Send at regular intervals (e.g., odometer, temperatures)
- * - PRIORITY_LOW: Send when convenient (e.g., fault codes, static info)
- * 
- * Note: Values are prefixed with PRIORITY_ to avoid conflicts with Arduino macros (HIGH, LOW)
- */
-enum class TelemetryPriority {
-    PRIORITY_LOW,       // Send when convenient (static/rarely-changing data)
-    PRIORITY_NORMAL,    // Regular interval updates
-    PRIORITY_HIGH,      // More frequent updates (active operations)
-    PRIORITY_REALTIME   // Send immediately (events, alerts)
-};
+
 
 /**
  * ITelemetryProvider - Interface for modules that report telemetry data
@@ -83,13 +67,15 @@ public:
     virtual void getTelemetry(JsonObject& data) = 0;
     
     /**
-     * Get current telemetry priority.
-     * Can change based on module state (e.g., higher during active charging).
+     * Get the maximum interval between sends (milliseconds).
+     * Provider should send at least this often even if hasChanged() is false.
+     * Can return different values based on active state (e.g., faster when charging).
+     * Default: 5 minutes (300000ms)
      * 
-     * @return Priority level for this provider's data
+     * @return Maximum milliseconds between telemetry sends
      */
-    virtual TelemetryPriority getPriority() {
-        return TelemetryPriority::PRIORITY_NORMAL;
+    virtual unsigned long getMaxInterval() {
+        return 300000;  // 5 minutes default
     }
     
     /**

@@ -11,7 +11,6 @@ void BodyProvider::getTelemetry(JsonObject& data) {
     const BodyManager::State& state = vehicleManager->body()->getState();
     
     data["locked"] = state.isLocked();
-    data["centralLock"] = static_cast<uint8_t>(state.centralLock);
     data["trunkOpen"] = state.trunkOpen;
     data["anyDoorOpen"] = state.anyDoorOpen();
     
@@ -23,35 +22,36 @@ void BodyProvider::getTelemetry(JsonObject& data) {
     doors["rearRightOpen"] = state.rearRightDoor.open;
 }
 
-TelemetryPriority BodyProvider::getPriority() {
-    if (!vehicleManager) return TelemetryPriority::PRIORITY_LOW;
-    
-    const BodyManager::State& state = vehicleManager->body()->getState();
-    
-    // High priority for lock state changes
-    if (state.isLocked() != lastLocked) {
-        return TelemetryPriority::PRIORITY_HIGH;
-    }
-    
-    return TelemetryPriority::PRIORITY_NORMAL;
-}
-
 bool BodyProvider::hasChanged() {
     if (initialReport) return true;
     if (!vehicleManager) return false;
+    
+    // Check max interval
+    if (millis() - lastSendTime >= getMaxInterval()) {
+        return true;
+    }
     
     const BodyManager::State& state = vehicleManager->body()->getState();
     
     // Lock state changed
     if (state.isLocked() != lastLocked) return true;
     
+    // Trunk state changed
+    if (state.trunkOpen != lastTrunkOpen) return true;
+    
+    // Door state changed
+    if (state.anyDoorOpen() != lastAnyDoorOpen) return true;
+    
     return false;
 }
 
 void BodyProvider::onTelemetrySent() {
     initialReport = false;
+    lastSendTime = millis();
     if (!vehicleManager) return;
     
     const BodyManager::State& state = vehicleManager->body()->getState();
     lastLocked = state.isLocked();
+    lastTrunkOpen = state.trunkOpen;
+    lastAnyDoorOpen = state.anyDoorOpen();
 }

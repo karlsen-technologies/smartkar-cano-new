@@ -17,22 +17,21 @@ void DriveProvider::getTelemetry(JsonObject& data) {
     data["odometerKm"] = state.odometerKm;
 }
 
-TelemetryPriority DriveProvider::getPriority() {
-    if (!vehicleManager) return TelemetryPriority::PRIORITY_LOW;
-    
-    const DriveManager::State& state = vehicleManager->drive()->getState();
-    
-    // High priority for ignition changes
-    if (state.ignitionOn != lastIgnitionOn) {
-        return TelemetryPriority::PRIORITY_HIGH;
+unsigned long DriveProvider::getMaxInterval() {
+    if (vehicleManager && vehicleManager->drive()->getState().ignitionOn) {
+        return 10000;  // 10 sec when driving
     }
-    
-    return TelemetryPriority::PRIORITY_NORMAL;
+    return 300000;  // 5 min default
 }
 
 bool DriveProvider::hasChanged() {
     if (initialReport) return true;
     if (!vehicleManager) return false;
+    
+    // Check if max interval exceeded
+    if (millis() - lastSendTime >= getMaxInterval()) {
+        return true;
+    }
     
     const DriveManager::State& state = vehicleManager->drive()->getState();
     
@@ -47,6 +46,7 @@ bool DriveProvider::hasChanged() {
 
 void DriveProvider::onTelemetrySent() {
     initialReport = false;
+    lastSendTime = millis();
     if (!vehicleManager) return;
     
     const DriveManager::State& state = vehicleManager->drive()->getState();

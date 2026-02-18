@@ -61,7 +61,7 @@ public:
         bool hasFix() const { return fixType >= 2; }
         
         bool isValid() const {
-            return hasFix() && (millis() - positionUpdate) < 30000;
+            return hasFix();  // Last-known position is valid even if old
         }
         
         const char* fixTypeStr() const {

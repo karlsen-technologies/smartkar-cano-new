@@ -16,26 +16,8 @@ void DeviceProvider::getTelemetry(JsonObject& data) {
         data["batteryVoltage"] = powerManager->getBatteryVoltage();
         data["batteryPercent"] = powerManager->getBatteryPercent();
         data["charging"] = powerManager->isCharging();
-        data["chargingState"] = powerManager->getChargingState();
-        data["chargeCurrentMa"] = powerManager->getChargeCurrentSetting();
         data["vbusConnected"] = powerManager->isVbusConnected();
     }
-    
-    // ESP32 chip info
-    data["chipModel"] = ESP.getChipModel();
-    data["chipRevision"] = ESP.getChipRevision();
-    data["cpuFreqMHz"] = ESP.getCpuFreqMHz();
-}
-
-TelemetryPriority DeviceProvider::getPriority() {
-    // Higher priority if charging state just changed
-    if (powerManager) {
-        bool currentCharging = powerManager->isCharging();
-        if (currentCharging != lastChargingState) {
-            return TelemetryPriority::PRIORITY_HIGH;
-        }
-    }
-    return TelemetryPriority::PRIORITY_LOW;
 }
 
 bool DeviceProvider::hasChanged() {
@@ -46,6 +28,11 @@ bool DeviceProvider::hasChanged() {
     
     // Check explicit change flag
     if (changed) {
+        return true;
+    }
+    
+    // Check if max interval exceeded
+    if (millis() - lastSendTime >= getMaxInterval()) {
         return true;
     }
     
@@ -72,6 +59,7 @@ bool DeviceProvider::hasChanged() {
 void DeviceProvider::onTelemetrySent() {
     initialReport = false;
     changed = false;
+    lastSendTime = millis();
     
     // Update last reported values
     if (powerManager) {

@@ -243,7 +243,6 @@ bool MqttManager::connect()
     sendStatus(true, false);
 
     // Send initial telemetry
-    lastTelemetryTime = millis();
     sendTelemetryNow(false);
 
     return true;
@@ -491,7 +490,6 @@ bool MqttManager::tryAdoptConnection()
         
         setState(MqttState::CONNECTED);
         sendStatus(true, false);  // Awake status
-        lastTelemetryTime = millis();
         sendTelemetryNow(false);
         
         return true;
@@ -630,12 +628,6 @@ bool MqttManager::sendTelemetryNow(bool changedOnly)
         }
     }
 
-    // Update last telemetry time if any were published
-    if (anyPublished)
-    {
-        lastTelemetryTime = millis();
-    }
-
     return anyPublished;
 }
 
@@ -696,14 +688,9 @@ void MqttManager::checkTelemetry()
         return;
     }
 
-    // Determine interval based on vehicle state
-    bool vehicleAwake = vehicleManager->isVehicleAwake();
-    unsigned long interval = vehicleAwake ? TELEMETRY_INTERVAL_AWAKE : TELEMETRY_INTERVAL_ASLEEP;
-
-    if (millis() - lastTelemetryTime >= interval)
-    {
-        sendTelemetryNow(false);
-    }
+    // No global interval - just check each provider
+    // Providers manage their own intervals and change detection
+    sendTelemetryNow(true);  // changedOnly = true
 }
 
 // ============================================================================

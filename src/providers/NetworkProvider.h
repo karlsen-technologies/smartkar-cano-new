@@ -31,7 +31,6 @@ public:
     // ITelemetryProvider interface
     const char* getTelemetryDomain() override { return "network"; }
     void getTelemetry(JsonObject& data) override;
-    TelemetryPriority getPriority() override;
     bool hasChanged() override;
     void onTelemetrySent() override;
     
@@ -47,11 +46,11 @@ private:
     // Change tracking
     bool initialReport = true;
     bool changed = false;
+    unsigned long lastSendTime = 0;
     
     // Last reported values for change detection
     ModemState lastModemState = ModemState::OFF;
     int16_t lastSignalStrength = 0;
-    bool lastMqttConnected = false;
     
     // Change threshold for signal strength (dBm)
     static const int16_t SIGNAL_CHANGE_THRESHOLD = 10;
